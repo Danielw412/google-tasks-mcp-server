@@ -154,7 +154,7 @@ async def cmd_auth_status(settings: Settings, as_json: bool, verify: bool) -> in
                 data["verification"] = verified
             print(json.dumps(data, indent=2))
         else:
-            print(f"State:        {status.state}")
+            print(f"State:        {status.state}" + (" (using fallback)" if status.fallback_active else ""))
             print(f"Message:      {status.message}")
             if status.action:
                 print(f"Next step:    {status.action}")

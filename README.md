@@ -162,6 +162,29 @@ Details:
   `/mcp`. The server also refuses `/mcp` and every other path when the request carries that
   public host name.
 
+### Fallback authorization (optional)
+
+The server's own authorization always comes first. While it is missing or unusable (never
+connected, disconnected, revoked, or expired after Testing mode's 7 days), the server can
+borrow another app's Google authorization instead, for example Canvas Task Sync's:
+
+```
+GTASKS_FALLBACK_TOKEN_FILE=~/projects/Canvas-Task-Sync/token.json
+GTASKS_FALLBACK_NAME=Canvas Task Sync
+```
+
+- The file is a google-auth authorized-user `token.json` (`client_id`, `client_secret`,
+  `refresh_token`, `scopes` including Google Tasks). The server only reads it. Access tokens
+  it refreshes from it stay in memory, so the other app keeps sole ownership of the file.
+- It is used only for the same Google account. While the server's own authorization works,
+  it records that account's default task list id in `google-account.json`. A fallback that
+  sees a different default list is refused.
+- While the fallback is in use, every task tool result carries an `auth_notice`. ChatGPT is
+  told to finish your whole request first, then tell you once that the connector's own sign-in
+  needs renewing, and hand you a fresh `auth_connect` link. `auth_status` reports
+  `fallback_active: true`, and the app UI shows **Reconnect needed** while still working.
+- If both authorizations fail, tools return `google_reauth_required` as usual.
+
 ## Add it to ChatGPT
 
 The tunnel behind profile `google-tasks-test` must be linked to the ChatGPT workspace you use. Manage it at
@@ -215,7 +238,9 @@ Errors come back as `isError` results with structured content of the form
 `{"error": {"code", "message", "action"}}`. The codes are `google_not_configured`,
 `google_not_connected`, `google_reauth_required`, `not_found`, `invalid_argument`,
 `google_unavailable`, `tasks_api_disabled`, and `google_api_error`. When Google is disconnected,
-ChatGPT is told to call `auth_connect` and hand you the link.
+ChatGPT is told to call `auth_connect` and hand you the link. When a request succeeded through the
+[fallback authorization](#fallback-authorization-optional), the result's `auth_notice` asks
+ChatGPT to finish the request first and then prompt you to reconnect.
 
 Things to try:
 
@@ -283,6 +308,8 @@ the defaults. The service, the CLI, and `doctor` all read the same file. See
 | `GTASKS_HOST` / `GTASKS_PORT` | `127.0.0.1` / `8765` | Host must be loopback. |
 | `GTASKS_GOOGLE_CLIENT_FILE` | `~/.config/google-tasks-mcp/client_secret.json` | Downloaded OAuth client JSON. |
 | `GTASKS_GOOGLE_CLIENT_ID` / `_SECRET` | – | Alternative to the JSON file. |
+| `GTASKS_FALLBACK_TOKEN_FILE` | – (off) | Another app's google-auth `token.json`, read when the server's own authorization is unusable. See [Fallback authorization](#fallback-authorization-optional). |
+| `GTASKS_FALLBACK_NAME` | `another app` | The app messages name as the fallback's owner, e.g. `Canvas Task Sync`. |
 | `GTASKS_PUBLIC_BASE_URL` | `http://127.0.0.1:8765` | Base URL of the browser-facing OAuth callback. |
 | `GTASKS_TIMEZONE` | system timezone | IANA name, e.g. `America/New_York`. |
 | `GTASKS_LOG_LEVEL` | `INFO` | |
@@ -295,6 +322,7 @@ the defaults. The service, the CLI, and `doctor` all read the same file. See
 | `~/.config/google-tasks-mcp/client_secret.json` | Google OAuth client | 0600 |
 | `~/.config/google-tasks-mcp/tunnel.env` | `CONTROL_PLANE_API_KEY` for the tunnel service | 0600 |
 | `~/.local/state/google-tasks-mcp/google-token.json` | Google refresh and access tokens | 0600 (dir 0700) |
+| `~/.local/state/google-tasks-mcp/google-account.json` | Default task list id of the connected account (fallback check; no secrets) | 0600 |
 | `~/.local/state/google-tasks-mcp/pending-auth/` | Sign-ins in progress (hashed state + PKCE verifier, 10 min) | 0600 |
 
 ## Operations and troubleshooting

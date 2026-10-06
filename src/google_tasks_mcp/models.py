@@ -25,6 +25,27 @@ class AuthStatus(BaseModel):
     )
     redirect_uri: str | None = Field(None, description="Where Google sends the browser after sign-in.")
     client_type: str | None = None
+    fallback_active: bool = Field(
+        False,
+        description="True when this server's own sign-in is unusable and calls use the fallback "
+        "Google authorization instead. `state` then describes the server's own sign-in.",
+    )
+
+
+class AuthNotice(BaseModel):
+    """Attached to task results while the fallback authorization is in use."""
+
+    code: Literal["google_native_auth_expired"] = "google_native_auth_expired"
+    message: str = Field(description="What to tell the user.")
+    instructions: str = Field(description="When and how to tell the user.")
+
+
+class GoogleResult(BaseModel):
+    auth_notice: AuthNotice | None = Field(
+        None,
+        description="Set when this server's own Google sign-in expired and the request used a fallback "
+        "authorization. Finish the user's request first, then follow its instructions.",
+    )
 
 
 class ConnectInfo(BaseModel):
@@ -70,17 +91,17 @@ class Task(BaseModel):
     links: list[TaskLink] = Field(default_factory=list)
 
 
-class TaskListsResult(BaseModel):
+class TaskListsResult(GoogleResult):
     task_lists: list[TaskList]
     default_task_list_id: str | None = None
 
 
-class TaskListResult(BaseModel):
+class TaskListResult(GoogleResult):
     task_list: TaskList
     message: str
 
 
-class TasksResult(BaseModel):
+class TasksResult(GoogleResult):
     task_list: TaskList | None = Field(None, description="The list that was read (null when all_lists=true).")
     tasks: list[Task]
     count: int
@@ -88,14 +109,14 @@ class TasksResult(BaseModel):
     today: str = Field(description="Today's date in the server's timezone, for interpreting due dates.")
 
 
-class TaskResult(BaseModel):
+class TaskResult(GoogleResult):
     task: Task
     task_list: TaskList
     message: str
     warnings: list[str] = Field(default_factory=list)
 
 
-class DeleteResult(BaseModel):
+class DeleteResult(GoogleResult):
     deleted: bool
     id: str
     message: str

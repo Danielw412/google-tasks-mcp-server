@@ -148,6 +148,21 @@ class Doctor:
                 self.add("google_auth", "FAIL", status.message, "Run: google-tasks-mcp auth")
             elif configured:
                 self.add("google_auth", "FAIL", status.message)
+            if self.settings.fallback_token_file is not None:
+                if status.fallback_active:
+                    self.add(
+                        "google_fallback",
+                        "WARN",
+                        f"in use: {self.settings.fallback_token_file}",
+                        "Run: google-tasks-mcp auth",
+                    )
+                else:
+                    problem = auth._fallback_problem()
+                    self.add(
+                        "google_fallback",
+                        "WARN" if problem else "PASS",
+                        f"{self.settings.fallback_token_file}: {problem or 'available, not in use'}",
+                    )
             if token_file.exists() and not _private(token_file):
                 self.add(
                     "google_token_file",
@@ -155,7 +170,7 @@ class Doctor:
                     f"{token_file} is readable by other users",
                     f"chmod 600 {token_file}",
                 )
-            if status.state != "connected":
+            if not status.connected:
                 self.add("google_api", "SKIP", "Google account not connected")
                 return
             if self.offline:

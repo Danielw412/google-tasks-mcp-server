@@ -15,6 +15,10 @@ import httpx2
 
 CLIENT_ID = "1234567890-testclient.apps.googleusercontent.com"
 CLIENT_SECRET = "GOCSPX-test-secret-value"
+# A second OAuth client, standing in for another app (Canvas Task Sync) whose token is the fallback.
+OTHER_CLIENT_ID = "1234567890-otherapp.apps.googleusercontent.com"
+OTHER_CLIENT_SECRET = "GOCSPX-other-secret-value"
+CLIENTS = {CLIENT_ID: CLIENT_SECRET, OTHER_CLIENT_ID: OTHER_CLIENT_SECRET}
 TASKS_SCOPE = "https://www.googleapis.com/auth/tasks"
 
 
@@ -79,8 +83,18 @@ class FakeGoogle:
         answer = urlencode({"state": params["state"], "code": code, "scope": self.grant_scope})
         return f"{params['redirect_uri']}?{answer}"
 
+    def issue_tokens(self) -> tuple[str, str]:
+        """An (access, refresh) pair granted outside this server, as another app would hold."""
+        access, refresh = "ya29." + secrets.token_urlsafe(24), "1//" + secrets.token_urlsafe(24)
+        self.access_tokens.add(access)
+        self.refresh_tokens.add(refresh)
+        return access, refresh
+
     def expire_access_tokens(self) -> None:
         self.access_tokens.clear()
+
+    def revoke(self, refresh_token: str) -> None:
+        self.refresh_tokens.discard(refresh_token)
 
     def revoke_all(self) -> None:
         self.access_tokens.clear()
@@ -109,7 +123,7 @@ class FakeGoogle:
 
     def _token(self, form: dict[str, list[str]]) -> httpx2.Response:
         f = {k: v[0] for k, v in form.items()}
-        if f.get("client_id") != CLIENT_ID or f.get("client_secret") != CLIENT_SECRET:
+        if CLIENTS.get(f.get("client_id", "")) != f.get("client_secret"):
             return httpx2.Response(401, json={"error": "invalid_client"})
         if f["grant_type"] == "authorization_code":
             grant = self.codes.pop(f["code"], None)

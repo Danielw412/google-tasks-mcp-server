@@ -96,6 +96,8 @@ class Settings:
     google_client_file: Path | None = None
     google_client_id: str | None = None
     google_client_secret: str | None = field(default=None, repr=False)
+    fallback_token_file: Path | None = None
+    fallback_name: str = "another app"  # Messages say "the Google authorization from <name>".
     public_base_url: str | None = None
     timezone: str | None = None
     log_level: str = "INFO"
@@ -141,6 +143,11 @@ class Settings:
     @property
     def token_file(self) -> Path:
         return self.state_dir / "google-token.json"
+
+    @property
+    def account_file(self) -> Path:
+        """Which Google account the native authorization belongs to (no secrets)."""
+        return self.state_dir / "google-account.json"
 
     @property
     def pending_dir(self) -> Path:
@@ -201,6 +208,7 @@ class Settings:
             raise ConfigError("GTASKS_PORT must be an integer") from exc
         state_dir = get("GTASKS_STATE_DIR")
         client_file = get("GTASKS_GOOGLE_CLIENT_FILE")
+        fallback_file = get("GTASKS_FALLBACK_TOKEN_FILE")
         return cls(
             host=get("GTASKS_HOST") or DEFAULT_HOST,
             port=port,
@@ -210,6 +218,8 @@ class Settings:
             google_client_file=Path(client_file).expanduser() if client_file else None,
             google_client_id=get("GTASKS_GOOGLE_CLIENT_ID"),
             google_client_secret=get("GTASKS_GOOGLE_CLIENT_SECRET"),
+            fallback_token_file=Path(fallback_file).expanduser() if fallback_file else None,
+            fallback_name=get("GTASKS_FALLBACK_NAME") or Settings.fallback_name,
             public_base_url=get("GTASKS_PUBLIC_BASE_URL"),
             timezone=get("GTASKS_TIMEZONE"),
             log_level=(get("GTASKS_LOG_LEVEL") or "INFO").upper(),

@@ -27,6 +27,7 @@ from .models import (
     ConnectInfo,
     DeleteResult,
     DisconnectResult,
+    GoogleResult,
     PingResult,
     TaskListResult,
     TaskListsResult,
@@ -119,6 +120,18 @@ def connect_instructions(svc: TasksService) -> str:
 def register_tools(mcp: MCPServer, svc: TasksService) -> None:
     auth = svc.auth
 
+    def google_tool(fn: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        """``guarded``, plus an auth_notice on the result while the fallback authorization is in use."""
+
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            result = await fn(*args, **kwargs)
+            if isinstance(result, GoogleResult):
+                result.auth_notice = auth.notice()
+            return result
+
+        return guarded(wrapper)
+
     @mcp.tool(name="ping", title="Ping", annotations=READ_ONLY)
     def ping(message: Annotated[str, Field(description="Text to echo back.")] = "hello") -> PingResult:
         """Echo a message to check that the MCP connection works. Does not contact Google."""
@@ -180,13 +193,13 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         annotations=READ_ONLY,
         meta=ui_meta("Loading task lists…", "Loaded task lists"),
     )
-    @guarded
+    @google_tool
     async def list_task_lists() -> TaskListsResult:
         """List the user's Google Tasks lists. The default list is marked is_default."""
         return await svc.list_task_lists()
 
     @mcp.tool(name="create_task_list", title="Create task list", annotations=WRITE)
-    @guarded
+    @google_tool
     async def create_task_list(
         title: Annotated[str, Field(description="Name of the new list.", max_length=1024)],
     ) -> TaskListResult:
@@ -194,7 +207,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         return await svc.create_task_list(title)
 
     @mcp.tool(name="rename_task_list", title="Rename task list", annotations=WRITE_IDEMPOTENT)
-    @guarded
+    @google_tool
     async def rename_task_list(
         task_list: Annotated[str, Field(description="Current list title or id.")],
         new_title: Annotated[str, Field(description="New name for the list.", max_length=1024)],
@@ -203,7 +216,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         return await svc.rename_task_list(task_list, new_title)
 
     @mcp.tool(name="delete_task_list", title="Delete task list", annotations=DESTRUCTIVE)
-    @guarded
+    @google_tool
     async def delete_task_list(
         task_list: Annotated[str, Field(description="Title or id of the list to delete.")],
     ) -> DeleteResult:
@@ -221,7 +234,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         annotations=READ_ONLY,
         meta=ui_meta("Loading tasks…", "Loaded tasks"),
     )
-    @guarded
+    @google_tool
     async def list_tasks(
         task_list: TaskListArg = None,
         all_lists: Annotated[bool, Field(description="Read every list instead of one.")] = False,
@@ -257,7 +270,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         )
 
     @mcp.tool(name="get_task", title="Get task", annotations=READ_ONLY)
-    @guarded
+    @google_tool
     async def get_task(task_id: TaskIdArg, task_list: TaskListHintArg = None) -> TaskResult:
         """Get one task by id, including its notes and links."""
         return await svc.get_task(task_id, task_list)
@@ -272,7 +285,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         annotations=WRITE,
         meta=ui_meta("Adding task…", "Task added"),
     )
-    @guarded
+    @google_tool
     async def create_task(
         title: Annotated[str, Field(description="Short task title, e.g. 'Finish physics homework'.")],
         notes: Annotated[str | None, Field(description="Optional details.", max_length=8192)] = None,
@@ -298,7 +311,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         annotations=WRITE_IDEMPOTENT,
         meta=ui_meta("Updating task…", "Task updated"),
     )
-    @guarded
+    @google_tool
     async def update_task(
         task_id: TaskIdArg,
         task_list: TaskListHintArg = None,
@@ -326,7 +339,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         annotations=WRITE_IDEMPOTENT,
         meta=ui_meta("Updating task…", "Task updated"),
     )
-    @guarded
+    @google_tool
     async def complete_task(
         task_id: TaskIdArg,
         task_list: TaskListHintArg = None,
@@ -343,7 +356,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         annotations=DESTRUCTIVE,
         meta=ui_meta("Deleting task…", "Task deleted"),
     )
-    @guarded
+    @google_tool
     async def delete_task(task_id: TaskIdArg, task_list: TaskListHintArg = None) -> DeleteResult:
         """Permanently delete a task (and its subtasks).
 
@@ -352,7 +365,7 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
         return await svc.delete_task(task_id, task_list=task_list)
 
     @mcp.tool(name="move_task", title="Move or reorder task", annotations=WRITE_IDEMPOTENT)
-    @guarded
+    @google_tool
     async def move_task(
         task_id: TaskIdArg,
         task_list: TaskListHintArg = None,
@@ -386,6 +399,9 @@ SERVER_INSTRUCTIONS = (
 Manage the user's Google Tasks. All tools act on the user's real Google account.
 - If a tool returns error code google_not_connected or google_reauth_required, call auth_connect and \
 show the user the sign-in link with its instructions (or suggest the Connect button in the Google Tasks app).
+- If a result includes auth_notice, the request still worked through a fallback authorization. Do not \
+interrupt the user's request for it: finish the whole request first, then at the end of your reply tell \
+the user once that the connector's own Google sign-in needs renewing, call auth_connect, and show the link.
 - Find task ids with list_tasks (use all_lists=true with query to search everywhere). Pass task_list \
 when you know it.
 - Use complete_task (completed=false to reopen) rather than deleting finished tasks. Only delete when \

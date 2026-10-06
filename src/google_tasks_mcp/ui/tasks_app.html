@@ -336,6 +336,7 @@ function render() {
   const pill = $("authPill");
   pill.className = "pill";
   if (!auth) { pill.textContent = "Loading…"; }
+  else if (auth.fallback_active) { pill.textContent = "Reconnect needed"; pill.classList.add("bad"); }
   else if (auth.connected) { pill.textContent = "Connected"; pill.classList.add("ok"); }
   else if (auth.state === "not_configured") { pill.textContent = "Not configured"; pill.classList.add("bad"); }
   else if (auth.state === "reauth_required") { pill.textContent = "Reconnect needed"; pill.classList.add("bad"); }
@@ -348,13 +349,15 @@ function render() {
   if (auth && auth.state === "not_configured") {
     $("setupText").textContent = auth.message + " " + (auth.action || "");
   }
-  const needsConnect = !!auth && !auth.connected && auth.state !== "not_configured";
+  const needsConnect = !!auth && (auth.fallback_active || (!auth.connected && auth.state !== "not_configured"));
   $("connectCard").classList.toggle("hidden", !needsConnect || !!state.pendingAuth);
   if (needsConnect) {
-    $("connectText").textContent = auth.state === "reauth_required"
+    $("connectText").textContent = auth.fallback_active
+      ? auth.message
+      : auth.state === "reauth_required"
       ? auth.message + " Reconnect to keep using Google Tasks."
       : "Connect your Google account to see and manage your tasks.";
-    $("connectBtn").textContent = auth.state === "reauth_required" ? "Reconnect Google" : "Connect Google";
+    $("connectBtn").textContent = auth.state === "reauth_required" || auth.fallback_active ? "Reconnect Google" : "Connect Google";
   }
   $("pendingCard").classList.toggle("hidden", !state.pendingAuth);
   if (state.pendingAuth) {

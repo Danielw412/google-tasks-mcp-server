@@ -11,6 +11,11 @@ ten-minute ``state``, and only the ``tasks`` scope.
   leave this module except as an ``Authorization`` header to Google.
 * Access tokens refresh automatically; a refresh token Google rejects marks the
   connection as needing reauthorization instead of failing obscurely.
+* Optional fallback (``GTASKS_FALLBACK_TOKEN_FILE``): when this server's own
+  authorization is missing or unusable, calls borrow another app's google-auth
+  ``token.json`` (Canvas Task Sync's, say). That file is only ever read: access
+  tokens refreshed from it stay in memory. It is used only for the Google account
+  the native authorization belonged to, checked by comparing default task lists.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx2
@@ -42,7 +47,7 @@ from .errors import (
     NotConnected,
     ReauthRequired,
 )
-from .models import AuthStatus, DisconnectResult
+from .models import AuthNotice, AuthStatus, DisconnectResult
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,7 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - endpoint URL, not a secret
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_PERMISSIONS_URL = "https://myaccount.google.com/connections"
+TASKS_DEFAULT_LIST_URL = "https://tasks.googleapis.com/tasks/v1/users/@me/lists/@default"
 TASKS_SCOPE = "https://www.googleapis.com/auth/tasks"
 SCOPES: tuple[str, ...] = (TASKS_SCOPE,)
 PENDING_TTL_SECONDS = 600
@@ -248,6 +254,71 @@ class AuthorizationRequest:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class AccessGrant:
+    token: str = field(repr=False)
+    source: Literal["native", "fallback"]
+
+
+@dataclass(frozen=True)
+class FallbackToken:
+    """The fields used from a google-auth authorized-user ``token.json``."""
+
+    client_id: str
+    client_secret: str = field(repr=False)
+    refresh_token: str = field(repr=False)
+    access_token: str | None = field(default=None, repr=False)
+    expires_at: float | None = None
+
+    @property
+    def key(self) -> str:
+        return hashlib.sha256(f"{self.client_id}|{self.refresh_token}".encode()).hexdigest()
+
+
+class FallbackUnavailable(Exception):
+    """The fallback authorization cannot be used; the message says why (never a secret)."""
+
+
+def _parse_expiry(value: Any) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:  # google-auth stores naive UTC.
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+def load_fallback_token(path: Path) -> FallbackToken:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise FallbackUnavailable(f"{path} does not exist") from None
+    except (OSError, ValueError) as exc:
+        raise FallbackUnavailable(f"{path} could not be read ({type(exc).__name__})") from None
+    if not isinstance(data, dict):
+        raise FallbackUnavailable(f"{path} is not a Google token file")
+    client_id, client_secret, refresh_token = (
+        data.get("client_id"),
+        data.get("client_secret"),
+        data.get("refresh_token"),
+    )
+    if not (isinstance(client_id, str) and isinstance(client_secret, str) and isinstance(refresh_token, str)):
+        raise FallbackUnavailable(f"{path} has no client_id, client_secret, and refresh_token")
+    if TASKS_SCOPE not in (data.get("scopes") or []):
+        raise FallbackUnavailable(f"{path} does not include Google Tasks access")
+    token = data.get("token")
+    return FallbackToken(
+        client_id=client_id,
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+        access_token=token if isinstance(token, str) and token else None,
+        expires_at=_parse_expiry(data.get("expiry")),
+    )
+
+
 class _TokenEndpointError(Exception):
     def __init__(self, status: int, error: str, description: str) -> None:
         super().__init__(f"{error}: {description}" if description else error)
@@ -272,6 +343,11 @@ class GoogleAuth:
         self.tokens = TokenStore(settings.token_file)
         self.pending = PendingStore(settings.pending_dir, PENDING_TTL_SECONDS, clock)
         self._lock = asyncio.Lock()
+        # Fallback state, all keyed by FallbackToken.key so a new fallback token starts clean.
+        self._fallback_cache: tuple[str, str, float] | None = None  # key, access token, expiry
+        self._fallback_failure: tuple[str, str] | None = None  # key, reason
+        self._fallback_verified: str | None = None  # key|default list id
+        self._using_fallback = False
 
     def client_config(self) -> ClientConfig:
         return load_client_config(self.settings)
@@ -311,6 +387,49 @@ class GoogleAuth:
         return None
 
     def status(self) -> AuthStatus:
+        native = self._native_status()
+        if native.connected or self.settings.fallback_token_file is None:
+            return native
+        name = self.settings.fallback_name
+        problem = self._fallback_problem()
+        if problem:
+            return native.model_copy(
+                update={
+                    "message": f"{native.message} The fallback Google authorization from {name} "
+                    f"is unavailable: {problem}."
+                }
+            )
+        return native.model_copy(
+            update={
+                "connected": True,
+                "fallback_active": True,
+                "message": f"This server's own Google sign-in is not usable ({native.message}) "
+                f"Google Tasks calls use the Google authorization from {name} until you reconnect.",
+                "action": ReauthRequired.default_action,
+            }
+        )
+
+    def notice(self) -> AuthNotice | None:
+        """What to tell the user while the fallback is in use, or None."""
+        status = self.status()
+        if not status.fallback_active:
+            return None
+        native = self._native_status()
+        return AuthNotice(
+            message=(
+                "The Google Tasks connector's own Google sign-in has expired or is unavailable "
+                f"({native.message.rstrip('.')}). This request used the Google authorization from "
+                f"{self.settings.fallback_name} instead. Reconnect so the connector stops depending on it."
+            ),
+            instructions=(
+                "Do not stop or ask the user about this now. First finish everything the user asked "
+                "for, including any remaining tool calls. Then, at the end of your reply, tell the user "
+                "once that the Google Tasks connector's sign-in needs renewing, call auth_connect, and "
+                "show them the sign-in link with its instructions."
+            ),
+        )
+
+    def _native_status(self) -> AuthStatus:
         redirect_uri = self.settings.redirect_uri
         try:
             client = self.client_config()
@@ -452,17 +571,163 @@ class GoogleAuth:
     # Access tokens --------------------------------------------------------------------
 
     async def access_token(self, *, force_refresh: bool = False) -> str:
+        return (await self.grant(force_refresh=force_refresh)).token
+
+    async def grant(self, *, force_refresh: bool = False) -> AccessGrant:
+        """An access token from this server's own authorization, else from the fallback."""
         async with self._lock:
-            client = self.client_config()
-            token = self.tokens.load()
-            if token is None:
-                raise NotConnected("No Google account is connected.")
-            problem = self._token_problem(token, client)
-            if problem:
-                raise ReauthRequired(problem)
-            if not force_refresh and token.expires_at - REFRESH_MARGIN_SECONDS > self._clock():
-                return token.access_token
-            return (await self._refresh(token, client)).access_token
+            try:
+                token = await self._native_access_token(force_refresh)
+            except (NotConfigured, NotConnected, ReauthRequired) as exc:
+                fallback_file = self.settings.fallback_token_file
+                if fallback_file is None:
+                    raise
+                try:
+                    access = await self._fallback_access_token(fallback_file, force_refresh)
+                except FallbackUnavailable as fallback:
+                    raise type(exc)(
+                        f"{exc.message} The fallback Google authorization from {self.settings.fallback_name} "
+                        "is unavailable too: "
+                        f"{fallback}.",
+                        code=exc.code,
+                    ) from None
+                if not self._using_fallback:
+                    logger.warning(
+                        "Own Google authorization unusable (%s); using the fallback from %s",
+                        exc.code,
+                        self.settings.fallback_name,
+                    )
+                    self._using_fallback = True
+                return AccessGrant(access, "fallback")
+            if self._using_fallback:
+                logger.info("Own Google authorization works again; fallback no longer used")
+                self._using_fallback = False
+            return AccessGrant(token, "native")
+
+    async def _native_access_token(self, force_refresh: bool) -> str:
+        client = self.client_config()
+        token = self.tokens.load()
+        if token is None:
+            raise NotConnected("No Google account is connected.")
+        problem = self._token_problem(token, client)
+        if problem:
+            raise ReauthRequired(problem)
+        if force_refresh or token.expires_at - REFRESH_MARGIN_SECONDS <= self._clock():
+            token = await self._refresh(token, client)
+        if self.settings.fallback_token_file is not None:
+            await self._remember_account(token)
+        return token.access_token
+
+    # Fallback authorization ----------------------------------------------------------
+
+    def _fallback_problem(self) -> str | None:
+        """Why the fallback cannot be used, judged without contacting Google."""
+        path = self.settings.fallback_token_file
+        if path is None:
+            return "not configured"
+        try:
+            fallback = load_fallback_token(path)
+        except FallbackUnavailable as exc:
+            return str(exc)
+        if self._fallback_failure and self._fallback_failure[0] == fallback.key:
+            return self._fallback_failure[1]
+        return None
+
+    async def _fallback_access_token(self, path: Path, force_refresh: bool) -> str:
+        fallback = load_fallback_token(path)
+        key = fallback.key
+        if self._fallback_failure and self._fallback_failure[0] == key:
+            raise FallbackUnavailable(self._fallback_failure[1])
+        now = self._clock()
+        cached = self._fallback_cache
+        if not force_refresh and cached and cached[0] == key and cached[2] - REFRESH_MARGIN_SECONDS > now:
+            access = cached[1]
+        elif (
+            not force_refresh
+            and fallback.access_token
+            and fallback.expires_at
+            and fallback.expires_at - REFRESH_MARGIN_SECONDS > now
+        ):
+            access = fallback.access_token  # The other app refreshed it recently.
+        else:
+            access = await self._refresh_fallback(fallback)
+        await self._verify_fallback_account(key, access)
+        return access
+
+    async def _refresh_fallback(self, fallback: FallbackToken) -> str:
+        """Refresh in memory only: the other app owns its token file."""
+        try:
+            data = await self._token_request(
+                {
+                    "grant_type": "refresh_token",
+                    "refresh_token": fallback.refresh_token,
+                    "client_id": fallback.client_id,
+                    "client_secret": fallback.client_secret,
+                }
+            )
+        except _TokenEndpointError as exc:
+            if exc.error in ("invalid_grant", "invalid_client", "unauthorized_client"):
+                reason = f"Google rejected it ({exc.error})"
+                self._fallback_failure = (fallback.key, reason)
+                raise FallbackUnavailable(reason) from None
+            raise FallbackUnavailable(f"refreshing it failed ({exc.error})") from None
+        if data.get("scope") and TASKS_SCOPE not in str(data["scope"]).split():
+            reason = "it no longer includes Google Tasks access"
+            self._fallback_failure = (fallback.key, reason)
+            raise FallbackUnavailable(reason)
+        access = str(data["access_token"])
+        self._fallback_cache = (fallback.key, access, self._clock() + float(data.get("expires_in", 3600)))
+        logger.info(
+            "Refreshed the fallback access token from %s (kept in memory)", self.settings.fallback_name
+        )
+        return access
+
+    async def _default_list_id(self, access_token: str) -> str:
+        """The default task list id, which identifies a Google account."""
+        try:
+            response = await self._http.get(
+                TASKS_DEFAULT_LIST_URL, headers={"Authorization": f"Bearer {access_token}"}
+            )
+        except httpx2.HTTPError as exc:
+            raise GoogleUnavailable(f"Could not reach Google Tasks ({type(exc).__name__}).") from None
+        if response.status_code == 401:
+            raise FallbackUnavailable("Google did not accept its access token")
+        try:
+            list_id = response.json().get("id") if response.status_code == 200 else None
+        except ValueError:
+            list_id = None
+        if not isinstance(list_id, str) or not list_id:
+            raise GoogleUnavailable(
+                f"Google Tasks returned HTTP {response.status_code} for the default list."
+            )
+        return list_id
+
+    async def _remember_account(self, token: StoredToken) -> None:
+        """Record which account the native authorization belongs to, once per connection."""
+        path = self.settings.account_file
+        with contextlib.suppress(OSError, ValueError):
+            if json.loads(path.read_text(encoding="utf-8")).get("connected_at") == token.connected_at:
+                return
+        try:
+            list_id = await self._default_list_id(token.access_token)
+        except (FallbackUnavailable, GoogleUnavailable):
+            return  # Try again on the next call; the tool call itself goes ahead.
+        write_private_json(path, {"connected_at": token.connected_at, "default_task_list_id": list_id})
+
+    async def _verify_fallback_account(self, key: str, access_token: str) -> None:
+        try:
+            remembered = json.loads(self.settings.account_file.read_text(encoding="utf-8"))
+            expected = str(remembered["default_task_list_id"])
+        except (OSError, ValueError, KeyError, TypeError):
+            # The native authorization never worked here, so there is no account to protect.
+            return
+        if self._fallback_verified == f"{key}|{expected}":
+            return
+        if await self._default_list_id(access_token) != expected:
+            reason = "it belongs to a different Google account than this server's own sign-in"
+            self._fallback_failure = (key, reason)
+            raise FallbackUnavailable(reason)
+        self._fallback_verified = f"{key}|{expected}"
 
     async def _refresh(self, token: StoredToken, client: ClientConfig) -> StoredToken:
         try:
@@ -559,4 +824,9 @@ class GoogleAuth:
                 f"Deleted the stored Google credentials. {problem or ''} "
                 f"Remove access manually at {GOOGLE_PERMISSIONS_URL} if needed."
             ).replace("  ", " ")
+        if self.settings.fallback_token_file is not None:
+            message += (
+                f" Google Tasks calls will use the Google authorization from {self.settings.fallback_name} "
+                "until you reconnect; remove GTASKS_FALLBACK_TOKEN_FILE to stop that."
+            )
         return DisconnectResult(disconnected=True, revoked=revoked, message=message)
