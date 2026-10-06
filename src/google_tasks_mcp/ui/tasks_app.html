@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Google Tasks</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: var(--color-background-primary, #ffffff);
+    --bg-soft: var(--color-background-secondary, #f5f6f8);
+    --text: var(--color-text-primary, #1f2328);
+    --muted: var(--color-text-secondary, #5d6672);
+    --border: var(--color-border-primary, #dde1e6);
+    --accent: #1a73e8;
+    --accent-text: #ffffff;
+    --danger: #c5221f;
+    --ok: #188038;
+    --warn: #b06000;
+    --radius: var(--border-radius-md, 10px);
+    --font: var(--font-sans, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: var(--color-background-primary, #1f2023);
+    --bg-soft: var(--color-background-secondary, #2a2b2f);
+    --text: var(--color-text-primary, #e8eaed);
+    --muted: var(--color-text-secondary, #a2a8b1);
+    --border: var(--color-border-primary, #3c3f45);
+    --accent: #8ab4f8;
+    --accent-text: #0b1d36;
+    --danger: #f28b82;
+    --ok: #81c995;
+    --warn: #fdd663;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); }
+  .app { padding: 12px 14px 14px; max-width: 760px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; flex: 1; min-width: 120px; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .pill.ok { color: var(--ok); border-color: currentColor; }
+  .pill.bad { color: var(--warn); border-color: currentColor; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  button { border: 1px solid var(--border); background: var(--bg); border-radius: 8px; padding: 5px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { background: var(--bg-soft); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button.primary:hover:not(:disabled) { filter: brightness(1.05); background: var(--accent); }
+  button.danger { color: var(--danger); }
+  button.danger.solid { background: var(--danger); border-color: var(--danger); color: var(--bg); }
+  button.icon { padding: 4px 8px; line-height: 1; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  select, input[type="text"], input[type="date"], textarea {
+    border: 1px solid var(--border); background: var(--bg); border-radius: 8px; padding: 5px 8px; min-width: 0;
+  }
+  textarea { width: 100%; resize: vertical; min-height: 54px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .toolbar select { flex: 1; min-width: 140px; }
+  label.check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+  .card { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; background: var(--bg-soft); margin-bottom: 10px; }
+  .card p { margin: 0 0 8px; }
+  .card .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  form.add { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  form.add input[name="title"] { flex: 1 1 220px; }
+  form.add .more { flex-basis: 100%; display: none; }
+  form.add.expanded .more { display: block; }
+  ul.tasks { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+  li.task { border-bottom: 1px solid var(--border); padding: 7px 2px; }
+  li.task.sub { padding-left: 28px; }
+  .line { display: flex; gap: 8px; align-items: flex-start; }
+  .line input[type="checkbox"] { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); flex: none; cursor: pointer; }
+  .body { flex: 1; min-width: 0; }
+  .title { overflow-wrap: anywhere; }
+  .done .title { text-decoration: line-through; color: var(--muted); }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .due.overdue { color: var(--danger); }
+  .due.today { color: var(--warn); }
+  .notes { font-size: 12.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+  .actions { display: flex; gap: 4px; flex: none; }
+  .actions button { font-size: 12px; padding: 2px 7px; }
+  .edit { display: grid; gap: 6px; margin-top: 6px; }
+  .edit .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .confirm { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .empty { color: var(--muted); padding: 16px 4px; text-align: center; }
+  .status { min-height: 18px; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  .status.error { color: var(--danger); }
+  .linkbox { width: 100%; font-size: 12px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header>
+    <h1>Google Tasks</h1>
+    <span class="pill" id="authPill">Loading…</span>
+    <button class="icon" id="refreshBtn" title="Refresh" aria-label="Refresh">↻</button>
+    <button class="icon hidden" id="expandBtn" title="Expand" aria-label="Expand to full screen">⤢</button>
+  </header>
+
+  <section id="setupCard" class="card hidden">
+    <p id="setupText"></p>
+  </section>
+
+  <section id="connectCard" class="card hidden">
+    <p id="connectText">Connect your Google account to see and manage your tasks.</p>
+    <div class="row">
+      <button class="primary" id="connectBtn">Connect Google</button>
+    </div>
+  </section>
+
+  <section id="pendingCard" class="card hidden">
+    <p><strong>Finish signing in with Google.</strong> <span id="pendingText"></span></p>
+    <p class="row"><input class="linkbox" id="pendingLink" type="text" readonly aria-label="Google sign-in link"></p>
+    <div class="row">
+      <button class="primary" id="checkBtn">I've signed in — check again</button>
+      <button id="cancelPendingBtn">Cancel</button>
+    </div>
+  </section>
+
+  <section id="tasksView" class="hidden">
+    <div class="toolbar">
+      <select id="listSelect" aria-label="Task list"></select>
+      <label class="check"><input type="checkbox" id="showCompleted"> Show completed</label>
+    </div>
+    <form class="add" id="addForm" autocomplete="off">
+      <input type="text" name="title" placeholder="Add a task" aria-label="New task title" maxlength="1024" required>
+      <input type="date" name="due" aria-label="Due date">
+      <button type="button" class="icon" id="moreBtn" title="Add notes" aria-label="Add notes">✎</button>
+      <button type="submit" class="primary" id="addBtn">Add</button>
+      <div class="more"><textarea name="notes" placeholder="Notes (optional)" aria-label="Notes" maxlength="8192"></textarea></div>
+    </form>
+    <ul class="tasks" id="taskList"></ul>
+    <div class="empty hidden" id="emptyMsg">No tasks here.</div>
+    <div class="card hidden" id="accountCard" style="margin-top:12px">
+      <div class="row">
+        <span class="pill" id="accountInfo"></span>
+        <button id="reconnectBtn">Reconnect</button>
+        <button class="danger" id="disconnectBtn">Disconnect</button>
+      </div>
+      <div class="confirm hidden" id="disconnectConfirm">
+        Disconnect Google and revoke this server's access?
+        <button class="danger solid" id="disconnectYes">Disconnect</button>
+        <button id="disconnectNo">Cancel</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px"><button id="accountToggle" class="icon" title="Account">Account…</button></div>
+  </section>
+
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+</div>
+
+<script>
+"use strict";
+/* ---------- MCP Apps bridge (JSON-RPC 2.0 over postMessage, spec 2026-01-26) ---------- */
+const Bridge = (() => {
+  const PROTOCOL_VERSION = "2026-01-26";
+  const pending = new Map();
+  const listeners = {};
+  let nextId = 1;
+  let mode = "none"; // "mcp" | "openai" | "none"
+  let hostCapabilities = {};
+  let hostContext = {};
+
+  const post = (msg) => window.parent.postMessage(Object.assign({ jsonrpc: "2.0" }, msg), "*");
+
+  function request(method, params, timeoutMs = 90000) {
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(method + " timed out")); }, timeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      post({ id, method, params });
+    });
+  }
+  const notify = (method, params) => post({ method, params: params || {} });
+  const on = (method, fn) => { (listeners[method] = listeners[method] || []).push(fn); };
+  const emit = (method, params) => (listeners[method] || []).forEach((fn) => fn(params || {}));
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const msg = event.data;
+    if (!msg || msg.jsonrpc !== "2.0") return;
+    if (msg.method === undefined && msg.id !== undefined) {
+      const p = pending.get(msg.id);
+      if (!p) return;
+      pending.delete(msg.id);
+      clearTimeout(p.timer);
+      if (msg.error) p.reject(Object.assign(new Error(msg.error.message || "Host error"), { rpc: msg.error }));
+      else p.resolve(msg.result);
+      return;
+    }
+    if (msg.id !== undefined) {
+      // Requests from the host.
+      if (msg.method === "ui/resource-teardown" || msg.method === "ping") post({ id: msg.id, result: {} });
+      else post({ id: msg.id, error: { code: -32601, message: "Method not found" } });
+    }
+    if (msg.method === "ui/notifications/host-context-changed") Object.assign(hostContext, msg.params || {});
+    emit(msg.method, msg.params);
+  });
+
+  async function init() {
+    try {
+      const result = await request("ui/initialize", {
+        protocolVersion: PROTOCOL_VERSION,
+        appInfo: { name: "google-tasks-app", version: "1.0.0" },
+        appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+      }, 4000);
+      hostCapabilities = (result && result.hostCapabilities) || {};
+      hostContext = (result && result.hostContext) || {};
+      mode = "mcp";
+      notify("ui/notifications/initialized", {});
+      const report = () => notify("ui/notifications/size-changed", {
+        height: Math.ceil(document.documentElement.getBoundingClientRect().height),
+      });
+      new ResizeObserver(report).observe(document.body);
+      report();
+    } catch (err) {
+      mode = window.openai && typeof window.openai.callTool === "function" ? "openai" : "none";
+    }
+    return mode;
+  }
+
+  async function callTool(name, args) {
+    if (mode === "mcp") return request("tools/call", { name, arguments: args || {} });
+    if (mode === "openai") return window.openai.callTool(name, args || {});
+    throw new Error("This view must run inside ChatGPT or another MCP Apps host.");
+  }
+
+  async function openLink(url) {
+    if (mode === "mcp") {
+      try {
+        const res = await request("ui/open-link", { url }, 15000);
+        if (!res || !res.isError) return true;
+      } catch (err) { /* fall through to the ChatGPT-specific API */ }
+    }
+    if (window.openai && typeof window.openai.openExternal === "function") {
+      try { await window.openai.openExternal({ href: url }); return true; } catch (err) { /* ignore */ }
+    }
+    return false;
+  }
+
+  async function requestFullscreen() {
+    if (mode === "mcp") return request("ui/request-display-mode", { mode: "fullscreen" }, 10000);
+    if (window.openai && window.openai.requestDisplayMode) return window.openai.requestDisplayMode({ mode: "fullscreen" });
+  }
+
+  return {
+    init, callTool, openLink, requestFullscreen, on,
+    get mode() { return mode; },
+    get hostContext() { return hostContext; },
+    get hostCapabilities() { return hostCapabilities; },
+  };
+})();
+
+/* ---------- App ---------- */
+const $ = (id) => document.getElementById(id);
+const state = {
+  app: null,            // AppState from the server
+  listId: null,
+  includeCompleted: false,
+  editingId: null,
+  confirmDeleteId: null,
+  busy: 0,
+  pendingAuth: null,    // {url, instructions}
+  pollTimer: null,
+  showAccount: false,
+};
+
+class ToolError extends Error {
+  constructor(info) { super(info.message || "Something went wrong"); this.code = info.code; this.action = info.action; }
+}
+
+async function call(name, args) {
+  state.busy++; renderBusy();
+  try {
+    const res = await Bridge.callTool(name, args);
+    const data = res && (res.structuredContent || res.structured_content);
+    if (res && res.isError) {
+      throw new ToolError((data && data.error) || { message: textOf(res) || "The request failed." });
+    }
+    return data || {};
+  } finally {
+    state.busy--; renderBusy();
+  }
+}
+const textOf = (res) => ((res && res.content) || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+
+function setStatus(text, isError) {
+  const el = $("status");
+  el.textContent = text || "";
+  el.classList.toggle("error", !!isError);
+}
+function reportError(err) {
+  if (err && (err.code === "google_not_connected" || err.code === "google_reauth_required")) {
+    refresh();
+  }
+  setStatus((err && err.message ? err.message : String(err)) + (err && err.action ? " " + err.action : ""), true);
+}
+function renderBusy() {
+  $("refreshBtn").disabled = state.busy > 0;
+  $("refreshBtn").textContent = state.busy > 0 ? "…" : "↻";
+}
+
+/* ----- date helpers ----- */
+function dueInfo(due) {
+  if (!due) return null;
+  const today = (state.app && state.app.today) || new Date().toISOString().slice(0, 10);
+  const d = new Date(due + "T00:00:00Z"), t = new Date(today + "T00:00:00Z");
+  const days = Math.round((d - t) / 86400000);
+  let label;
+  if (days === 0) label = "Today";
+  else if (days === 1) label = "Tomorrow";
+  else if (days === -1) label = "Yesterday";
+  else label = d.toLocaleDateString(undefined, { timeZone: "UTC", month: "short", day: "numeric",
+    year: d.getUTCFullYear() === t.getUTCFullYear() ? undefined : "numeric" });
+  return { label, cls: days < 0 ? "overdue" : days === 0 ? "today" : "" };
+}
+
+/* ----- rendering ----- */
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v === true) node.setAttribute(k, "");
+    else node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return node;
+}
+
+function render() {
+  const app = state.app;
+  const auth = app && app.auth;
+  const pill = $("authPill");
+  pill.className = "pill";
+  if (!auth) { pill.textContent = "Loading…"; }
+  else if (auth.connected) { pill.textContent = "Connected"; pill.classList.add("ok"); }
+  else if (auth.state === "not_configured") { pill.textContent = "Not configured"; pill.classList.add("bad"); }
+  else if (auth.state === "reauth_required") { pill.textContent = "Reconnect needed"; pill.classList.add("bad"); }
+  else { pill.textContent = "Not connected"; pill.classList.add("bad"); }
+
+  const caps = Bridge.hostContext.availableDisplayModes || [];
+  $("expandBtn").classList.toggle("hidden", !(caps.includes("fullscreen") && Bridge.hostContext.displayMode !== "fullscreen"));
+
+  $("setupCard").classList.toggle("hidden", !(auth && auth.state === "not_configured"));
+  if (auth && auth.state === "not_configured") {
+    $("setupText").textContent = auth.message + " " + (auth.action || "");
+  }
+  const needsConnect = !!auth && !auth.connected && auth.state !== "not_configured";
+  $("connectCard").classList.toggle("hidden", !needsConnect || !!state.pendingAuth);
+  if (needsConnect) {
+    $("connectText").textContent = auth.state === "reauth_required"
+      ? auth.message + " Reconnect to keep using Google Tasks."
+      : "Connect your Google account to see and manage your tasks.";
+    $("connectBtn").textContent = auth.state === "reauth_required" ? "Reconnect Google" : "Connect Google";
+  }
+  $("pendingCard").classList.toggle("hidden", !state.pendingAuth);
+  if (state.pendingAuth) {
+    $("pendingText").textContent = state.pendingAuth.instructions;
+    $("pendingLink").value = state.pendingAuth.url;
+  }
+
+  const connected = !!auth && auth.connected;
+  $("tasksView").classList.toggle("hidden", !connected);
+  if (!connected) return;
+
+  // List selector
+  const select = $("listSelect");
+  select.replaceChildren(...app.task_lists.map((l) => el("option", { value: l.id, selected: app.selected_task_list && l.id === app.selected_task_list.id },
+    l.title + (l.is_default ? " (default)" : ""))));
+  $("showCompleted").checked = state.includeCompleted;
+
+  // Tasks
+  const list = $("taskList");
+  list.replaceChildren(...app.tasks.map(renderTask));
+  $("emptyMsg").classList.toggle("hidden", app.tasks.length > 0);
+  $("emptyMsg").textContent = state.includeCompleted ? "No tasks in this list." : "No open tasks in this list.";
+
+  // Account
+  $("accountCard").classList.toggle("hidden", !state.showAccount);
+  $("accountToggle").textContent = state.showAccount ? "Hide account" : "Account…";
+  const since = auth.connected_at ? " since " + new Date(auth.connected_at).toLocaleDateString() : "";
+  $("accountInfo").textContent = "Google Tasks connected" + since;
+}
+
+function renderTask(task) {
+  const isEditing = state.editingId === task.id;
+  const info = dueInfo(task.due);
+  const li = el("li", { class: "task" + (task.parent ? " sub" : "") + (task.completed ? " done" : ""), "data-id": task.id });
+  const checkbox = el("input", {
+    type: "checkbox", checked: task.completed, "aria-label": (task.completed ? "Reopen " : "Complete ") + (task.title || "task"),
+    onchange: (e) => toggleComplete(task, e.target.checked),
+  });
+  const body = el("div", { class: "body" },
+    el("div", { class: "title" }, task.title || "(untitled)"),
+    (info || task.links.length) ? el("div", { class: "meta" },
+      info ? el("span", { class: "due " + info.cls }, "📅 " + info.label) : null,
+      task.links.length ? el("span", {}, "🔗 " + (task.links[0].description || task.links[0].type || "link")) : null) : null,
+    task.notes && !isEditing ? el("div", { class: "notes" }, task.notes.length > 280 ? task.notes.slice(0, 280) + "…" : task.notes) : null);
+  const actions = el("div", { class: "actions" },
+    el("button", { type: "button", "aria-label": "Edit " + task.title, onclick: () => { state.editingId = isEditing ? null : task.id; state.confirmDeleteId = null; render(); } }, isEditing ? "Close" : "Edit"),
+    el("button", { type: "button", class: "danger", "aria-label": "Delete " + task.title, onclick: () => { state.confirmDeleteId = task.id; state.editingId = null; render(); } }, "Delete"));
+  li.append(el("div", { class: "line" }, checkbox, body, actions));
+
+  if (state.confirmDeleteId === task.id) {
+    li.append(el("div", { class: "confirm" }, "Delete “" + (task.title || "untitled") + "”" + (hasChildren(task) ? " and its subtasks" : "") + "? This can't be undone.",
+      el("button", { type: "button", class: "danger solid", onclick: () => deleteTask(task) }, "Delete"),
+      el("button", { type: "button", onclick: () => { state.confirmDeleteId = null; render(); } }, "Cancel")));
+  }
+  if (isEditing) li.append(renderEditor(task));
+  return li;
+}
+const hasChildren = (task) => state.app.tasks.some((t) => t.parent === task.id);
+
+function renderEditor(task) {
+  const title = el("input", { type: "text", value: task.title, "aria-label": "Title", maxlength: "1024" });
+  const due = el("input", { type: "date", value: task.due || "", "aria-label": "Due date" });
+  const notes = el("textarea", { "aria-label": "Notes", maxlength: "8192" });
+  notes.value = task.notes || "";
+  const form = el("form", { class: "edit", onsubmit: (e) => { e.preventDefault(); saveEdit(task, title.value, due.value, notes.value); } },
+    title,
+    el("div", { class: "row" }, el("label", { class: "check" }, "Due ", due),
+      due.value ? el("button", { type: "button", onclick: () => { due.value = ""; } }, "Clear date") : null),
+    notes,
+    el("div", { class: "row" }, el("button", { type: "submit", class: "primary" }, "Save"),
+      el("button", { type: "button", onclick: () => { state.editingId = null; render(); } }, "Cancel")));
+  setTimeout(() => title.focus(), 0);
+  return form;
+}
+
+/* ----- actions ----- */
+function selectedListId() {
+  return state.listId || (state.app && state.app.selected_task_list && state.app.selected_task_list.id) || null;
+}
+
+async function refresh() {
+  try {
+    const app = await call("tasks_app_state", { task_list: selectedListId(), include_completed: state.includeCompleted });
+    applyState(app);
+    if (app.error) setStatus(app.error.message + (app.error.action ? " " + app.error.action : ""), true);
+    else setStatus(app.auth.connected ? "Updated " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "");
+  } catch (err) { setStatus(err.message || String(err), true); }
+}
+
+function applyState(app) {
+  state.app = app;
+  state.includeCompleted = !!app.include_completed;
+  if (app.selected_task_list) state.listId = app.selected_task_list.id;
+  if (app.auth && app.auth.connected && state.pendingAuth) stopPending();
+  render();
+}
+
+async function addTask(form) {
+  const title = form.title.value.trim();
+  if (!title) return;
+  $("addBtn").disabled = true;
+  try {
+    const args = { title, task_list: selectedListId() };
+    if (form.due.value) args.due = form.due.value;
+    if (form.notes.value.trim()) args.notes = form.notes.value.trim();
+    const res = await call("create_task", args);
+    form.reset();
+    form.classList.remove("expanded");
+    if (!res.task.parent) state.app.tasks.unshift(res.task);
+    render();
+    setStatus(res.message + (res.warnings && res.warnings.length ? " " + res.warnings.join(" ") : ""), false);
+  } catch (err) { reportError(err); }
+  finally { $("addBtn").disabled = false; form.title.focus(); }
+}
+
+async function toggleComplete(task, completed) {
+  const previous = task.completed;
+  task.completed = completed; render();
+  try {
+    const res = await call("complete_task", { task_id: task.id, task_list: task.task_list_id, completed });
+    replaceTask(res.task);
+    if (completed && !state.includeCompleted) {
+      state.app.tasks = state.app.tasks.filter((t) => t.id !== task.id);
+    }
+    render();
+    setStatus(res.message, false);
+  } catch (err) {
+    task.completed = previous; render(); reportError(err);
+  }
+}
+
+async function saveEdit(task, title, due, notes) {
+  const args = { task_id: task.id, task_list: task.task_list_id };
+  if (title.trim() && title.trim() !== task.title) args.title = title.trim();
+  if ((due || null) !== (task.due || null)) args.due = due || "none";
+  if (notes.trim() !== (task.notes || "")) args.notes = notes.trim();
+  if (Object.keys(args).length === 2) { state.editingId = null; render(); return; }
+  try {
+    const res = await call("update_task", args);
+    replaceTask(res.task);
+    state.editingId = null; render();
+    setStatus(res.message, false);
+  } catch (err) { reportError(err); }
+}
+
+async function deleteTask(task) {
+  try {
+    const res = await call("delete_task", { task_id: task.id, task_list: task.task_list_id });
+    state.app.tasks = state.app.tasks.filter((t) => t.id !== task.id && t.parent !== task.id);
+    state.confirmDeleteId = null; render();
+    setStatus(res.message, false);
+  } catch (err) { state.confirmDeleteId = null; render(); reportError(err); }
+}
+
+function replaceTask(updated) {
+  const i = state.app.tasks.findIndex((t) => t.id === updated.id);
+  if (i >= 0) state.app.tasks[i] = updated;
+}
+
+async function connect() {
+  try {
+    const info = await call("auth_connect", {});
+    const opened = await Bridge.openLink(info.authorization_url);
+    state.pendingAuth = {
+      url: info.authorization_url,
+      instructions: (opened ? "" : "Your browser did not open automatically; copy the link below into a browser. ") + info.instructions,
+    };
+    render();
+    startPolling();
+  } catch (err) { reportError(err); }
+}
+
+function startPolling() {
+  clearInterval(state.pollTimer);
+  const started = Date.now();
+  state.pollTimer = setInterval(async () => {
+    if (Date.now() - started > 10 * 60 * 1000) { stopPending(); render(); return; }
+    if (document.hidden) return;
+    try {
+      const status = await Bridge.callTool("auth_status", {});
+      const s = status && status.structuredContent;
+      if (s && s.connected) { stopPending(); await refresh(); }
+    } catch (err) { /* keep polling */ }
+  }, 5000);
+}
+function stopPending() { clearInterval(state.pollTimer); state.pollTimer = null; state.pendingAuth = null; }
+
+async function disconnect() {
+  try {
+    const res = await call("auth_disconnect", {});
+    $("disconnectConfirm").classList.add("hidden");
+    state.showAccount = false;
+    await refresh();
+    setStatus(res.message, !res.revoked);
+  } catch (err) { reportError(err); }
+}
+
+/* ----- wiring ----- */
+function applyTheme(ctx) {
+  if (!ctx) return;
+  if (ctx.theme) document.documentElement.dataset.theme = ctx.theme;
+  const vars = ctx.styles && ctx.styles.variables;
+  if (vars) for (const [k, v] of Object.entries(vars)) if (k.startsWith("--") && v) document.documentElement.style.setProperty(k, v);
+}
+
+$("refreshBtn").addEventListener("click", refresh);
+$("expandBtn").addEventListener("click", () => Bridge.requestFullscreen().catch(() => {}));
+$("connectBtn").addEventListener("click", connect);
+$("reconnectBtn").addEventListener("click", connect);
+$("checkBtn").addEventListener("click", refresh);
+$("cancelPendingBtn").addEventListener("click", () => { stopPending(); render(); });
+$("pendingLink").addEventListener("focus", (e) => e.target.select());
+$("listSelect").addEventListener("change", (e) => { state.listId = e.target.value; state.editingId = null; refresh(); });
+$("showCompleted").addEventListener("change", (e) => { state.includeCompleted = e.target.checked; refresh(); });
+$("addForm").addEventListener("submit", (e) => { e.preventDefault(); addTask(e.target); });
+$("moreBtn").addEventListener("click", () => $("addForm").classList.toggle("expanded"));
+$("accountToggle").addEventListener("click", () => { state.showAccount = !state.showAccount; render(); });
+$("disconnectBtn").addEventListener("click", () => $("disconnectConfirm").classList.remove("hidden"));
+$("disconnectNo").addEventListener("click", () => $("disconnectConfirm").classList.add("hidden"));
+$("disconnectYes").addEventListener("click", disconnect);
+
+let gotInitialResult = false;
+Bridge.on("ui/notifications/tool-input", (params) => {
+  const args = (params && params.arguments) || {};
+  if (args.include_completed !== undefined) state.includeCompleted = !!args.include_completed;
+});
+Bridge.on("ui/notifications/tool-result", (result) => {
+  const data = result && result.structuredContent;
+  if (data && data.auth) { gotInitialResult = true; applyState(data); }
+});
+Bridge.on("ui/notifications/host-context-changed", (ctx) => { applyTheme(ctx); render(); });
+
+(async () => {
+  const mode = await Bridge.init();
+  applyTheme(Bridge.hostContext);
+  if (mode === "openai" && window.openai.toolOutput && window.openai.toolOutput.auth) {
+    gotInitialResult = true;
+    applyState(window.openai.toolOutput);
+  }
+  if (mode === "none") {
+    setStatus("Open this view from ChatGPT (or another MCP Apps host) to manage tasks.", true);
+    return;
+  }
+  // The tool result normally arrives right after initialization; fetch it ourselves if it doesn't.
+  setTimeout(() => { if (!gotInitialResult) refresh(); }, 1500);
+})();
+</script>
+</body>
+</html>

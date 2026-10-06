@@ -1,0 +1,27 @@
+# systemd user unit template. scripts/setup-services.sh replaces @REPO@, @CONFIG_DIR@, @TUNNEL_CLIENT@
+# and @PROFILE@ and installs it as ~/.config/systemd/user/google-tasks-tunnel.service.
+[Unit]
+Description=OpenAI Secure MCP Tunnel (profile @PROFILE@) for the Google Tasks MCP server
+Documentation=file://@REPO@/README.md
+Wants=google-tasks-mcp.service
+After=google-tasks-mcp.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=exec
+# Holds CONTROL_PLANE_API_KEY (chmod 600). The tunnel profile reads it as env:CONTROL_PLANE_API_KEY.
+EnvironmentFile=@CONFIG_DIR@/tunnel.env
+ExecStart=@TUNNEL_CLIENT@ run --profile @PROFILE@
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target

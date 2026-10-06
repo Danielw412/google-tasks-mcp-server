@@ -1,6 +1,19 @@
+# Python
 .venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
 build/
 dist/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets and local state never belong in Git. They live outside the repo by default
+# (~/.config/google-tasks-mcp and ~/.local/state/google-tasks-mcp); these guard against copies.
+.env
+*.env
+client_secret*.json
+credentials.json
+google-token.json
+token.json
+tunnel.env

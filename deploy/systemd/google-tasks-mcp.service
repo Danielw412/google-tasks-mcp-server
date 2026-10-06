@@ -1,0 +1,32 @@
+# systemd user unit template. scripts/setup-services.sh replaces @REPO@ and @CONFIG_DIR@ and installs it as
+# ~/.config/systemd/user/google-tasks-mcp.service. With lingering enabled it starts at boot.
+[Unit]
+Description=Google Tasks MCP server (127.0.0.1:8765)
+Documentation=file://@REPO@/README.md
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=exec
+WorkingDirectory=@REPO@
+# Optional non-secret settings (see deploy/server.env.example). The Google OAuth client JSON and the
+# stored Google credentials are separate 0600 files; nothing secret belongs in this unit.
+EnvironmentFile=-@CONFIG_DIR@/server.env
+ExecStart=@REPO@/.venv/bin/google-tasks-mcp serve
+# Units ordered after this one (the tunnel) start only once /readyz answers.
+ExecStartPost=@REPO@/.venv/bin/google-tasks-mcp wait-ready --timeout 30
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+# Hardening. The server only needs to write its state directory (~/.local/state/google-tasks-mcp).
+StateDirectory=google-tasks-mcp
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target

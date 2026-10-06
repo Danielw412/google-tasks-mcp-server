@@ -4,14 +4,48 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "google-tasks-mcp-server"
-version = "0.1.0"
-description = "Minimal MCP server for testing a Secure MCP Tunnel connection."
+version = "0.2.0"
+description = "Personal Google Tasks MCP server with an MCP Apps UI, for ChatGPT over the OpenAI Secure MCP Tunnel."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["mcp>=2.3,<3"]
+dependencies = [
+    "mcp>=2.3,<3",
+    # Google OAuth and Tasks REST calls. Already required by mcp; listed because we import it directly.
+    "httpx2>=2.10",
+    "pydantic>=2.12",
+    "starlette>=0.48",
+    "uvicorn>=0.31",
+    # zoneinfo needs the IANA database on Windows.
+    "tzdata; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
-google-tasks-mcp = "google_tasks_mcp.server:main"
+google-tasks-mcp = "google_tasks_mcp.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+google_tasks_mcp = ["ui/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "ASYNC"]
+# RUF001-3: the code deliberately uses typographic quotes in messages.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# The CLI and doctor are one-shot commands; brief blocking calls there are fine.
+"src/google_tasks_mcp/cli.py" = ["ASYNC109", "ASYNC250"]
+"src/google_tasks_mcp/diagnostics.py" = ["ASYNC221"]
+"tests/**" = ["S101", "S105", "S106", "ASYNC110"]
