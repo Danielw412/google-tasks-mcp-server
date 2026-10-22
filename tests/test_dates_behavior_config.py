@@ -83,7 +83,7 @@ def test_prepare_new_task_cleans_titles() -> None:
     task = prepare_new_task(
         NewTask(title='  "finish   physics homework."  ', notes="  ", due=None, task_list=None)
     )
-    assert task.title == "Finish physics homework"
+    assert task.title == "finish physics homework"
     assert task.notes is None
     with pytest.raises(ValueError):
         prepare_new_task(NewTask(title=' "" ', notes=None, due=None, task_list=None))
@@ -103,7 +103,10 @@ async def test_behavior_defaults_apply_to_create_task(
     monkeypatch.setattr(task_behavior, "prepare_new_task", shout)
     await connect(components, google)
     async with Client(components.mcp) as client:
-        result = await client.call_tool("create_task", {"title": "essay"})
+        guide = await client.call_tool("get_task_creation_instructions", {})
+        result = await client.call_tool(
+            "create_task", {"title": "essay", "instructions_revision": guide.structured_content["revision"]}
+        )
     data = result.structured_content
     assert data["task"]["title"] == "ESSAY"
     assert data["task_list"]["title"] == "School"

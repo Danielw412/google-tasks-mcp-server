@@ -461,6 +461,8 @@ async function addTask(form) {
   $("addBtn").disabled = true;
   try {
     const args = { title, task_list: selectedListId() };
+    const guide = await call("get_task_creation_instructions", {});
+    args.instructions_revision = guide.revision;
     if (form.due.value) args.due = form.due.value;
     if (form.notes.value.trim()) args.notes = form.notes.value.trim();
     const res = await call("create_task", args);

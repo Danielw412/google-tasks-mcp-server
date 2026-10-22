@@ -20,7 +20,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from . import __version__
 from .config import MCP_PATH, OAUTH_CALLBACK_PATH, SERVER_NAME, Settings
 from .errors import ServiceError
-from .oauth import GoogleAuth
+from .oauth import GoogleAuth, time_limited_warning
 
 logger = logging.getLogger(__name__)
 
@@ -56,17 +56,18 @@ def oauth_callback_endpoint(auth: GoogleAuth) -> Callable[[Request], Awaitable[H
                 "Nothing to do", "This address receives Google's sign-in response.", ok=False, status=400
             )
         try:
-            await auth.complete_from_params(params)
+            token = await auth.complete_from_params(params)
         except ServiceError as exc:
             logger.info("Google sign-in callback failed: %s", exc.code)
             return _page(
                 "Google Tasks was not connected", f"{exc.message} {exc.action or ''}", ok=False, status=400
             )
-        return _page(
-            "Google Tasks connected",
-            "You can close this tab and return to ChatGPT. If the Google Tasks app is open, use Refresh.",
-            ok=True,
+        message = (
+            "You can close this tab and return to ChatGPT. If the Google Tasks app is open, use Refresh."
         )
+        if token.refresh_token_expires_at:
+            message += " " + time_limited_warning(token.refresh_token_expires_at)
+        return _page("Google Tasks connected", message, ok=True)
 
     return oauth_callback
 

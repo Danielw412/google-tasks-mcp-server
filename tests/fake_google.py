@@ -158,15 +158,15 @@ class FakeGoogle:
                 )
             access = "ya29." + secrets.token_urlsafe(24)
             self.access_tokens.add(access)
-            return httpx2.Response(
-                200,
-                json={
-                    "access_token": access,
-                    "expires_in": 3599,
-                    "scope": self.grant_scope,
-                    "token_type": "Bearer",
-                },
-            )
+            body = {
+                "access_token": access,
+                "expires_in": 3599,
+                "scope": self.grant_scope,
+                "token_type": "Bearer",
+            }
+            if self.refresh_token_expires_in:  # Google repeats the remaining lifetime on refresh.
+                body["refresh_token_expires_in"] = self.refresh_token_expires_in
+            return httpx2.Response(200, json=body)
         return httpx2.Response(400, json={"error": "unsupported_grant_type"})
 
     # Tasks API -----------------------------------------------------------------------

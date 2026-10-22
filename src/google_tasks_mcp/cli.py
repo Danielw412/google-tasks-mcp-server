@@ -17,7 +17,7 @@ from . import __version__
 from .config import OAUTH_CALLBACK_PATH, ConfigError, Settings
 from .errors import ServiceError
 from .logs import configure_logging
-from .oauth import GoogleAuth
+from .oauth import GoogleAuth, time_limited_warning
 from .server import new_http_client, serve
 
 
@@ -67,11 +67,13 @@ async def cmd_auth(settings: Settings, redirect_url: str | None, timeout: float)
         auth = GoogleAuth(settings, http)
         if redirect_url:
             try:
-                await auth.complete_from_redirect(redirect_url)
+                token = await auth.complete_from_redirect(redirect_url)
             except ServiceError as exc:
                 print(f"Not connected: {exc.message}", file=sys.stderr)
                 return 1
             print("Google Tasks connected.")
+            if token.refresh_token_expires_at:
+                print(f"\nWarning: {time_limited_warning(token.refresh_token_expires_at)}", file=sys.stderr)
             return 0
 
         try:
@@ -119,7 +121,8 @@ async def cmd_auth(settings: Settings, redirect_url: str | None, timeout: float)
                         print(f"Not connected: {exc.message}", file=sys.stderr)
                         return 1
                     break
-                if _token_mtime(auth) != before and auth.status().connected:
+                # Not `.connected`: a configured fallback makes that true without this server's sign-in.
+                if _token_mtime(auth) != before and auth.status().state == "connected":
                     break
             else:
                 print("Timed out waiting for Google sign-in.", file=sys.stderr)
@@ -131,6 +134,9 @@ async def cmd_auth(settings: Settings, redirect_url: str | None, timeout: float)
                 await task
         status = auth.status()
         print(f"\nGoogle Tasks connected ({' '.join(status.scopes)}).")
+        token = auth.tokens.load()
+        if token and token.refresh_token_expires_at:
+            print(f"\nWarning: {time_limited_warning(token.refresh_token_expires_at)}", file=sys.stderr)
         return 0
 
 

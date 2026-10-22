@@ -29,6 +29,9 @@ from .models import (
     DisconnectResult,
     GoogleResult,
     PingResult,
+    TaskInstructionsProposalResult,
+    TaskInstructionsResult,
+    TaskInstructionsUpdateResult,
     TaskListResult,
     TaskListsResult,
     TaskResult,
@@ -136,6 +139,92 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
     def ping(message: Annotated[str, Field(description="Text to echo back.")] = "hello") -> PingResult:
         """Echo a message to check that the MCP connection works. Does not contact Google."""
         return PingResult(success=True, message=message, server=SERVER_NAME, version=__version__)
+
+    # Editable instructions: preview is read-only; applying requires explicit approval.
+
+    @mcp.resource(
+        "task-creation://instructions",
+        name="task_creation_instructions",
+        title="Task creation instructions",
+        description="Editable list-specific task creation guide. get_task_creation_instructions "
+        "also returns the revision required for creation.",
+        mime_type="text/markdown",
+    )
+    async def task_creation_instructions_resource() -> str:
+        return svc.task_instructions.read().content
+
+    @mcp.tool(
+        name="get_task_creation_instructions",
+        title="Read task creation instructions",
+        annotations=READ_ONLY,
+        meta=ui_meta("Reading task instructions…", "Task instructions loaded"),
+    )
+    @guarded
+    async def get_task_creation_instructions() -> TaskInstructionsResult:
+        """Load the editable guide before EACH create_task call, without reading Google tasks.
+
+        Follow the content for titles, course tags, notes, list routing, and default dates.
+        Pass revision as instructions_revision to create_task. Also use this before proposing
+        guide changes. Do not edit instructions without the user's explicit approval.
+        """
+        instructions = svc.task_instructions.show()
+        return TaskInstructionsResult(
+            content=instructions.content,
+            revision=instructions.revision,
+            source_path=str(instructions.source_path),
+            writable_path=str(svc.task_instructions.path),
+            today=svc.today().isoformat(),
+            timezone=svc.tz_name,
+        )
+
+    @mcp.tool(
+        name="propose_task_creation_instructions",
+        title="Preview task instruction changes",
+        annotations=READ_ONLY,
+    )
+    @guarded
+    async def propose_task_creation_instructions(
+        content: Annotated[str, Field(description="Proposed complete Markdown guide.", max_length=40_000)],
+        expected_revision: Annotated[str, Field(description="Revision from the current guide.")],
+    ) -> TaskInstructionsProposalResult:
+        """Prepare a diff for user review. Does not edit any file or task.
+
+        Use when the user requests guide changes. Show the returned diff and obtain explicit
+        approval of those exact changes before update_task_creation_instructions. Proposals
+        expire after 30 minutes or a server restart; only the most recent 20 are kept.
+        """
+        proposal_id, diff = svc.task_instructions.propose(content, expected_revision)
+        return TaskInstructionsProposalResult(
+            proposal_id=proposal_id,
+            diff=diff,
+            content=content,
+            message="No instructions changed. Show the diff and ask the user to approve it.",
+        )
+
+    @mcp.tool(
+        name="update_task_creation_instructions",
+        title="Apply approved task instruction changes",
+        annotations=WRITE_IDEMPOTENT,
+    )
+    @guarded
+    async def update_task_creation_instructions(
+        proposal_id: Annotated[str, Field(description="ID of the exact proposal the user approved.")],
+        user_approved: Annotated[
+            bool, Field(description="True only after explicit user approval of the proposed diff.")
+        ] = False,
+    ) -> TaskInstructionsUpdateResult:
+        """Save the proposed guide ONLY after the user explicitly approves its exact diff.
+
+        Never call merely because a task/list was created or because inferred preferences
+        changed. Only the proposed Markdown file is edited. Changes apply immediately; a stale
+        proposal requires a new diff and new approval. This never changes existing Google tasks.
+        """
+        instructions = svc.task_instructions.apply(proposal_id, user_approved=user_approved)
+        return TaskInstructionsUpdateResult(
+            revision=instructions.revision,
+            source_path=str(instructions.source_path),
+            message="Saved the approved task instructions. They apply to the next task creation.",
+        )
 
     # Google account -------------------------------------------------------------
 
@@ -287,22 +376,32 @@ def register_tools(mcp: MCPServer, svc: TasksService) -> None:
     )
     @google_tool
     async def create_task(
-        title: Annotated[str, Field(description="Short task title, e.g. 'Finish physics homework'.")],
+        title: Annotated[str, Field(description="Title formatted using the live task creation guide.")],
         notes: Annotated[str | None, Field(description="Optional details.", max_length=8192)] = None,
         due: Annotated[
             str | None,
             Field(
                 description="Optional due date: YYYY-MM-DD or a phrase such as 'today', 'tomorrow', "
-                "'friday', 'next week', 'in 3 days', 'oct 12'. Resolved in the user's timezone."
+                "'friday', 'next week', 'in 3 days', 'oct 12'. Omit for the live guide's list "
+                "default. Use 'none' for an explicitly undated task."
             ),
         ] = None,
         task_list: TaskListArg = None,
         parent_task_id: Annotated[
             str | None, Field(description="Create as a subtask of this task id (same list).")
         ] = None,
+        instructions_revision: Annotated[
+            str | None, Field(description="Current revision from get_task_creation_instructions; required.")
+        ] = None,
     ) -> TaskResult:
+        instructions = svc.task_instructions.check_revision(instructions_revision)
         return await svc.create_task(
-            title, notes=notes, due=due, task_list=task_list, parent_task_id=parent_task_id
+            title,
+            notes=notes,
+            due=due,
+            task_list=task_list,
+            parent_task_id=parent_task_id,
+            instructions=instructions,
         )
 
     @mcp.tool(

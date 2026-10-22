@@ -100,6 +100,7 @@ class Settings:
     fallback_name: str = "another app"  # Messages say "the Google authorization from <name>".
     public_base_url: str | None = None
     timezone: str | None = None
+    task_instructions_file: Path | None = None
     log_level: str = "INFO"
     tunnel_profile: str = DEFAULT_TUNNEL_PROFILE
     tunnel_client: str = DEFAULT_TUNNEL_CLIENT
@@ -209,6 +210,7 @@ class Settings:
         state_dir = get("GTASKS_STATE_DIR")
         client_file = get("GTASKS_GOOGLE_CLIENT_FILE")
         fallback_file = get("GTASKS_FALLBACK_TOKEN_FILE")
+        instructions_file = get("GTASKS_TASK_INSTRUCTIONS_FILE")
         return cls(
             host=get("GTASKS_HOST") or DEFAULT_HOST,
             port=port,
@@ -222,6 +224,7 @@ class Settings:
             fallback_name=get("GTASKS_FALLBACK_NAME") or Settings.fallback_name,
             public_base_url=get("GTASKS_PUBLIC_BASE_URL"),
             timezone=get("GTASKS_TIMEZONE"),
+            task_instructions_file=Path(instructions_file).expanduser() if instructions_file else None,
             log_level=(get("GTASKS_LOG_LEVEL") or "INFO").upper(),
             tunnel_profile=get("GTASKS_TUNNEL_PROFILE") or DEFAULT_TUNNEL_PROFILE,
             tunnel_client=get("GTASKS_TUNNEL_CLIENT") or DEFAULT_TUNNEL_CLIENT,

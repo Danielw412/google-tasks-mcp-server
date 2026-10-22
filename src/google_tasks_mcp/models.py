@@ -146,3 +146,25 @@ class PingResult(BaseModel):
     message: str
     server: str
     version: str
+
+
+class TaskInstructionsResult(BaseModel):
+    content: str = Field(description="Live Markdown guide to follow before creating a task.")
+    revision: str = Field(description="Pass as instructions_revision to create_task.")
+    source_path: str = Field(description="Active Markdown file; can be edited directly by the user.")
+    writable_path: str = Field(description="Where approved MCP edits are saved.")
+    today: str
+    timezone: str
+
+
+class TaskInstructionsProposalResult(BaseModel):
+    proposal_id: str
+    diff: str = Field(description="Show this exact diff to the user for approval before updating.")
+    content: str
+    message: str
+
+
+class TaskInstructionsUpdateResult(BaseModel):
+    revision: str
+    source_path: str
+    message: str

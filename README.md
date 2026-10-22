@@ -23,8 +23,8 @@ ChatGPT ──(OpenAI Secure MCP Tunnel: outbound only, profile google-tasks-tes
 - **Loopback only.** The server refuses to bind anywhere but loopback. It rejects requests
   whose `Host` header isn't loopback (DNS-rebinding guard), and `/mcp` also rejects foreign
   `Origin` headers.
-- **Works without the GUI.** "Add 'finish physics homework' to my Google Tasks tomorrow" is a
-  single `create_task` call. The app UI is optional.
+- **Works without the GUI.** The agent reads the maintained task guide, then calls `create_task`.
+  It does not need to inspect existing tasks to learn formatting. The app UI is optional.
 
 ## Contents
 
@@ -75,6 +75,12 @@ You need your own OAuth client. It is free, and personal use needs no Google ver
      *Publishing status* to **In production**. Google then shows an "unverified app" warning at
      sign-in. That is expected for a personal app: click *Advanced → Go to … (unsafe)*.
      `doctor` warns you when your authorization has an expiry date.
+   - **Publishing does not extend authorizations granted while in Testing.** They still end 7 days
+     after they were granted, so reconnect once after publishing. Publishing covers every OAuth
+     client in the project, so reconnect any other app whose client lives there too (for example
+     the [fallback](#fallback-authorization-optional)'s). `auth`, the sign-in page, and the log say
+     so when Google still issues a time-limited authorization; once the authorization lasts,
+     `auth-status` shows no *Expires at* line.
 4. **Create the client:** go to *Clients → Create client*.
    - Application type: **Desktop app**, the recommended type. Desktop clients accept the
      loopback redirect `http://127.0.0.1:8765/oauth/google/callback` without any redirect-URI
@@ -184,6 +190,8 @@ GTASKS_FALLBACK_NAME=Canvas Task Sync
   needs renewing, and hand you a fresh `auth_connect` link. `auth_status` reports
   `fallback_active: true`, and the app UI shows **Reconnect needed** while still working.
 - If both authorizations fail, tools return `google_reauth_required` as usual.
+- A fallback from a Testing-mode project ends after 7 days as well. The server logs the date it
+  stops working each time it refreshes the fallback, so reconnect before then.
 
 ## Add it to ChatGPT
 
@@ -210,7 +218,10 @@ Read + Use* permissions.
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `create_task` | write | Create a task: title, optional notes, a `due` date or phrase ("tomorrow", "friday", "oct 12"), list, and parent. |
+| `create_task` | write | Create a task using the current guide revision, title, optional notes/date, list, and parent. |
+| `get_task_creation_instructions` | read | Load the live Markdown guide, revision, file paths, today's date, and timezone; no Google call. |
+| `propose_task_creation_instructions` | read | Preview a complete replacement guide as a diff for user approval; no file changes. |
+| `update_task_creation_instructions` | write | Save an approved proposal; refuses missing approval, expired proposals, and stale revisions. |
 | `list_tasks` | read | Open tasks by default. Options: `include_completed`, `query`, `due_before`, `due_after`, `all_lists`. |
 | `get_task` | read | One task by id; finds its list automatically. |
 | `update_task` | write | Change title, notes, or due date (`"none"` clears it). |
@@ -278,24 +289,54 @@ How it is built:
 
 ## Customize task creation
 
-**Edit [`src/google_tasks_mcp/task_behavior.py`](src/google_tasks_mcp/task_behavior.py).** It is
-the only file that decides how a request becomes a task, and it doesn't touch MCP, OAuth, or
-the Google API.
+**Edit the separate Markdown guide, starting with
+[`src/google_tasks_mcp/task_creation.md`](src/google_tasks_mcp/task_creation.md).** It records
+the user's existing title/notes styles, course tags, list routing, and concrete examples.
+Homework and test preparation belong in School; actual assessments belong in Tests. School
+administrative deadlines stay concise and untagged. SCC code changes go in Jira; operations
+go in SCC. The Debate list is not used.
 
-| Setting | Effect |
-|---|---|
-| `CREATION_GUIDANCE` | Instructions ChatGPT follows when creating tasks: title style, when to set dates, notes, several tasks per request. Added to the server instructions and the `create_task` description. |
-| `DEFAULT_TASK_LIST` | List for new tasks when none is named (`None` = your default list). |
-| `DEFAULT_DUE` | Due date when none is given (`None`, or a phrase such as `"today"`). |
-| `TIMEZONE` | Timezone for "today", "tomorrow", and so on (`GTASKS_TIMEZONE` overrides it). |
-| `WARN_ON_DUPLICATE_TITLE` | Warn when an open task with the same title exists. |
-| `CAPITALIZE_FIRST_LETTER`, `STRIP_TRAILING_PERIOD`, `MAX_TITLE_LENGTH` | Title clean-up. |
-| `SAME_WEEKDAY_MEANS_TODAY`, `NEXT_WEEKDAY_SKIPS_A_WEEK`, `NEXT_WEEK_WEEKDAY`, `END_OF_WEEK_WEEKDAY` | How date phrases resolve. |
-| `prepare_new_task(task)` | Hook run on every new task, from ChatGPT or the app, just before it is sent to Google. Change the title, notes, due date, or list, or raise `ValueError("why")` to reject the task. |
+Before **each** creation, the agent calls `get_task_creation_instructions`, follows its content,
+and passes `revision` as `instructions_revision` to `create_task`. Missing or stale revisions
+are rejected before any task is created. ChatGPT, and Codex through it, keep the tool list from
+when the connector was added or last refreshed, so an older connector has neither that
+parameter nor the read tool. A `create_task` without a revision is therefore refused with the
+current guide in the error message. The same request is then accepted for 10 minutes, as long as
+the guide is unchanged. Refresh the connector in ChatGPT to get the new tools. The read tool and the `task-creation://instructions`
+Markdown resource always read from disk; guide edits need no server restart or plugin refresh.
+The repository skill is [`.agents/skills/google-tasks/SKILL.md`](.agents/skills/google-tasks/SKILL.md).
+The MCP instructions also describe this workflow for clients that do not discover local skills.
 
-Then run `pytest`, restart the service with
-`systemctl --user restart google-tasks-mcp`, and refresh the plugin in ChatGPT. The parser for
-date phrases lives in `dates.py`; its rules come from the settings above.
+The first TOML block in the guide defines default dates. `default_due = "today"` applies to all
+lists unless a named list table overrides it; Jira and SCC use `"none"`. Defaults are enforced
+after resolving a list name or ID, including the account's default list. Explicit dates and
+explicit `due="none"` take precedence. Title capitalization is preserved. The timezone defaults
+to America/New_York and `GTASKS_TIMEZONE` overrides it.
+
+Without `GTASKS_TASK_INSTRUCTIONS_FILE`, the packaged guide is used until the first approved MCP
+edit saves `<state directory>/task_creation.md`. That saved file then becomes authoritative and
+survives code upgrades. `get_task_creation_instructions` reports `source_path` (the active file)
+and `writable_path` (where approved edits are saved). To always use a specific editable file,
+set `GTASKS_TASK_INSTRUCTIONS_FILE` to its path; that file must exist. On Windows the default
+saved file is `%LOCALAPPDATA%\google-tasks-mcp\task_creation.md`; on Linux it is
+`~/.local/state/google-tasks-mcp/task_creation.md`, which the existing service sandbox can write.
+
+To edit through the agent: read the guide, prepare replacement Markdown, call
+`propose_task_creation_instructions` with `expected_revision`, and show the diff to the user.
+Only after explicit approval of that diff call `update_task_creation_instructions` with
+`proposal_id` and `user_approved=true`. The server requires that flag and an unchanged guide;
+the agent is responsible for obtaining actual user approval. Proposals expire after 30 minutes
+or a server restart. Preview never writes a file or changes Google Tasks. Adding/renaming a list
+does not automatically edit the guide.
+
+For a future list, add a list-purpose/style section and routing row to the Markdown. New lists
+already default to today; to change this, add a `[lists."New List"]` TOML table with a supported
+`default_due` phrase or `"none"`. This needs no Python change. The guide includes this procedure.
+
+Advanced code hooks (title cleanup, duplicate warnings, date parsing conventions, and an optional
+code-level default override) remain in `task_behavior.py`; code changes require a server restart
+and plugin refresh. After installing this update, restart the server and refresh the connector
+once to discover the new tools and `create_task` parameter.
 
 ## Configuration reference
 
@@ -311,7 +352,8 @@ the defaults. The service, the CLI, and `doctor` all read the same file. See
 | `GTASKS_FALLBACK_TOKEN_FILE` | – (off) | Another app's google-auth `token.json`, read when the server's own authorization is unusable. See [Fallback authorization](#fallback-authorization-optional). |
 | `GTASKS_FALLBACK_NAME` | `another app` | The app messages name as the fallback's owner, e.g. `Canvas Task Sync`. |
 | `GTASKS_PUBLIC_BASE_URL` | `http://127.0.0.1:8765` | Base URL of the browser-facing OAuth callback. |
-| `GTASKS_TIMEZONE` | system timezone | IANA name, e.g. `America/New_York`. |
+| `GTASKS_TIMEZONE` | `America/New_York` | IANA name for date phrases. |
+| `GTASKS_TASK_INSTRUCTIONS_FILE` | bundled guide, then `<state directory>/task_creation.md` | Optional authoritative Markdown file; must exist when configured. |
 | `GTASKS_LOG_LEVEL` | `INFO` | |
 | `GTASKS_STATE_DIR` | `~/.local/state/google-tasks-mcp` | Credentials. The systemd sandbox only allows the default. |
 | `GTASKS_TUNNEL_PROFILE` / `GTASKS_TUNNEL_CLIENT` | `google-tasks-test` / `/usr/local/bin/tunnel-client` | Used by `doctor`. |
@@ -357,7 +399,8 @@ Health endpoints:
 |---|---|
 | `google_not_configured` | Install the client JSON ([Google Cloud setup](#google-cloud-setup)); `doctor` shows the expected path. |
 | `google_not_connected` | `google-tasks-mcp auth`, or **Connect** in the app. |
-| `google_reauth_required` | The authorization was revoked or expired (Testing mode: 7 days). Reconnect, and publish the consent screen. |
+| `google_reauth_required` | The authorization was revoked or expired (Testing mode: 7 days). Publish the consent screen, then reconnect. |
+| `auth-status` still shows *Expires at* after reconnecting | The project is still in Testing (publishing affects only authorizations granted afterwards). Publish it, then reconnect again. |
 | `tasks_api_disabled` | Enable the Google Tasks API in the client's Cloud project. |
 | Browser shows "can't connect" after approving | Expected without an SSH tunnel: paste that URL into `google-tasks-mcp auth`. |
 | "This sign-in link is unknown or was already used" / "expired" | Start again; links are single-use and last 10 minutes. |
@@ -423,7 +466,9 @@ Linux-only.
 
 ```
 src/google_tasks_mcp/
-  task_behavior.py  ★ editable task-creation behavior
+  task_creation.md  ★ editable task-creation guide, examples, and list date defaults
+  task_instructions.py  live guide loading, revision checks, approved proposals
+  task_behavior.py  advanced title cleanup and date-phrase hooks
   tools.py          MCP tools: schemas, annotations, structured errors, server instructions
   app_ui.py         MCP Apps resource + UI tools;  ui/tasks_app.html is the view
   service.py        task logic shared by tools and UI (list resolution, conversions)

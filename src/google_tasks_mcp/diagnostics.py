@@ -328,8 +328,9 @@ class Doctor:
                     f"systemctl --user status {TUNNEL_SERVICE}",
                 )
 
+        # An ephemeral health port: the running tunnel service already holds the profile's listen_addr.
         result = subprocess.run(  # noqa: S603
-            [binary, "doctor", "--profile", s.tunnel_profile],
+            [binary, "doctor", "--profile", s.tunnel_profile, "--health.listen-addr", "127.0.0.1:0"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -338,7 +339,7 @@ class Doctor:
         )
         verdict = re.search(r"^RESULT\s+(\w+)", result.stdout, re.MULTILINE)
         failed = re.search(r"^FAILED_CHECKS\s+(.+)$", result.stdout, re.MULTILINE)
-        if verdict and verdict.group(1) == "pass":
+        if verdict and verdict.group(1) in ("ok", "pass"):
             self.add("tunnel_doctor", "PASS", f"tunnel-client doctor --profile {s.tunnel_profile}: pass")
         else:
             detail = failed.group(1) if failed else f"exit code {result.returncode}"

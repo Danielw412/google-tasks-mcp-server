@@ -1,19 +1,7 @@
-"""Task-creation behavior: the one file to edit to change how tasks are created.
+"""Advanced title/date hooks. User-editable guidance lives in task_creation.md.
 
-Everything that decides *how a request like "add finish physics homework
-tomorrow" becomes a Google Task* lives here:
-
-* ``CREATION_GUIDANCE``: instructions ChatGPT reads (added to the server
-  instructions and to the ``create_task`` tool description).
-* Defaults: target list, timezone, default due date, duplicate warnings.
-* Date-phrase rules used when ``due`` is a phrase such as "friday".
-* ``prepare_new_task``: a hook that runs on every new task (from ChatGPT or
-  the app UI) just before it is sent to Google.
-
-Nothing in this file touches MCP transport, OAuth, or the Google API. After
-editing, run ``pytest`` and restart the server (``systemctl --user restart
-google-tasks-mcp``); then use "Refresh" on the plugin in ChatGPT so it reloads
-the tool descriptions.
+The live guide is loaded by task_instructions.py. Code changes here still
+require a server restart; edits to the active Markdown guide do not.
 """
 
 from __future__ import annotations
@@ -30,10 +18,9 @@ DEFAULT_TASK_LIST: str | None = None
 
 # IANA timezone for "today", "tomorrow", weekdays, and so on. The GTASKS_TIMEZONE
 # environment variable overrides it; None means the server's local timezone.
-TIMEZONE: str | None = None
+TIMEZONE: str | None = "America/New_York"
 
-# Due date for tasks created without one. None means no due date; a phrase such
-# as "today" is also accepted.
+# Optional code-level override. None uses the Markdown guide's per-list defaults.
 DEFAULT_DUE: str | None = None
 
 # Add a warning (the task is still created) when an open task with the same
@@ -42,7 +29,7 @@ WARN_ON_DUPLICATE_TITLE = True
 
 # --- Title clean-up (applied in prepare_new_task) ---------------------------------
 
-CAPITALIZE_FIRST_LETTER = True
+CAPITALIZE_FIRST_LETTER = False
 STRIP_TRAILING_PERIOD = True
 # Google allows 1024 characters; longer titles are cut and the rest moved to notes.
 MAX_TITLE_LENGTH = 1024
@@ -63,19 +50,17 @@ END_OF_WEEK_WEEKDAY = 4
 
 CREATION_GUIDANCE = """\
 Creating tasks:
-- For requests like "add X to my tasks", "remind me to X", or "I need to X by Friday", call \
-create_task directly. Do not open the Google Tasks app for simple requests.
-- title: a short imperative phrase in the user's words, without filler such as "remind me to", \
-"add", or "to my Google Tasks", and without surrounding quotes. Example: "Finish physics homework".
-- due: only when the user gives a date or day. Pass the user's phrase ("tomorrow", "friday", \
-"in 3 days", "oct 12") or an ISO date (YYYY-MM-DD). The server resolves phrases in the user's \
-timezone. Google Tasks stores dates only: if the user gives a time of day, keep the date and put \
-the time in notes.
-- notes: details the user actually gave (links, time of day, context). Never invent details.
-- task_list: only when the user names a list; otherwise omit it so the default list is used.
-- Several tasks in one request: call create_task once per task.
-- Afterwards, confirm briefly using the title, list, and due date the tool returned. Mention any \
-warnings, such as a possible duplicate.
+- Before EACH create_task call, call get_task_creation_instructions. Follow its live Markdown \
+for list routing, title style, notes, and dates; pass its revision as instructions_revision.
+- Do not list existing tasks to rediscover their style. The guide contains concrete examples.
+- Use task tools directly for simple requests. Choose the list from the live guide unless the \
+user specifies one. The live guide is authoritative over cached formatting or routing rules.
+- For an unspecified date, omit due and use the guide's current per-list default, which the \
+server enforces. Explicit dates or requests for no date take precedence. Put supplied times in notes.
+- Never edit the guide while creating tasks. For requested instruction changes, preview with \
+propose_task_creation_instructions, show the diff, obtain explicit user approval, then call \
+update_task_creation_instructions with that proposal ID and user_approved=true.
+- Confirm briefly with the returned title, list, and due date; mention any warnings.
 """
 
 

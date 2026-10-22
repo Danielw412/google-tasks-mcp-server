@@ -18,6 +18,9 @@ pytestmark = pytest.mark.anyio
 
 
 async def call(client: Client, name: str, args: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
+    if name == "create_task":
+        guide = await client.call_tool("get_task_creation_instructions", {})
+        args = {**(args or {}), "instructions_revision": guide.structured_content["revision"]}
     result = await client.call_tool(name, args or {})
     assert result.structured_content is not None, result
     # Text content mirrors the structured content (MCP backwards-compatibility rule).
@@ -55,10 +58,10 @@ async def test_create_task_from_natural_request(components: Components, google: 
         )
     assert not is_error, data
     tomorrow = (today(components) + timedelta(days=1)).isoformat()
-    assert data["task"]["title"] == "Finish physics homework"
+    assert data["task"]["title"] == "finish physics homework"
     assert data["task"]["due"] == tomorrow
     assert data["task_list"]["title"] == "My Tasks" and data["task_list"]["is_default"]
-    assert data["message"] == f"Created “Finish physics homework” in My Tasks, due {tomorrow}."
+    assert data["message"] == f"Created “finish physics homework” in My Tasks, due {tomorrow}."
     stored = google.tasks["default-list"][0]
     assert stored["due"] == f"{tomorrow}T00:00:00.000Z"
 
@@ -256,6 +259,8 @@ async def test_annotations_mark_read_only_and_destructive_tools(components: Comp
         "get_task",
         "open_tasks_app",
         "tasks_app_state",
+        "get_task_creation_instructions",
+        "propose_task_creation_instructions",
     }
     destructive = {"auth_disconnect", "delete_task", "delete_task_list"}
     for name, tool in tools.items():

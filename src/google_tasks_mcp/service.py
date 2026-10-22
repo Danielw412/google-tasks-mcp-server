@@ -28,6 +28,7 @@ from .models import (
     TasksResult,
 )
 from .oauth import GoogleAuth
+from .task_instructions import TaskInstructions, TaskInstructionsStore
 
 LISTS_CACHE_SECONDS = 30.0
 
@@ -61,6 +62,10 @@ class TasksService:
         self._lists: tuple[float, list[TaskList]] | None = None
         self._default_list_id: str | None = None
         self._account: str | None = None
+        self.task_instructions = TaskInstructionsStore(
+            settings.task_instructions_file or settings.state_dir / "task_creation.md",
+            use_bundled_default=settings.task_instructions_file is None,
+        )
 
     def today(self) -> date:
         return today_in(self.tz)
@@ -245,8 +250,12 @@ class TasksService:
         due: str | None = None,
         task_list: str | None = None,
         parent_task_id: str | None = None,
+        instructions: TaskInstructions | None = None,
     ) -> TaskResult:
-        due_text = due if due and due.strip() else behavior.DEFAULT_DUE
+        instructions = instructions or self.task_instructions.read()
+        # Resolve defaults after the hook and list lookup, so list IDs and the account's
+        # actual default list get the same policy as case-insensitive list titles.
+        due_text = due if due is not None else behavior.DEFAULT_DUE
         draft = behavior.NewTask(
             title=title,
             notes=notes,
@@ -258,6 +267,13 @@ class TasksService:
         except ValueError as exc:
             raise InvalidArgument(str(exc)) from None
         lst = await self.resolve_list(draft.task_list)
+        if due_text is None and draft.due is None:
+            draft = behavior.NewTask(
+                title=draft.title,
+                notes=draft.notes,
+                due=self._due(instructions.due_for(lst.title)),
+                task_list=draft.task_list,
+            )
 
         warnings: list[str] = []
         if draft.due and draft.due < self.today():
@@ -275,6 +291,7 @@ class TasksService:
             body["notes"] = draft.notes
         if draft.due:
             body["due"] = to_google_due(draft.due)
+        self.task_instructions.check_revision(instructions.revision)
         raw = await self.client.insert_task(lst.id, body, parent=(parent_task_id or "").strip() or None)
         task = self.to_task(raw, lst)
         message = f"Created “{task.title}” in {lst.title}" + (f", due {task.due}." if task.due else ".")

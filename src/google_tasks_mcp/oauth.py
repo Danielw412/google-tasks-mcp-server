@@ -66,6 +66,15 @@ def iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def time_limited_warning(expires_at: float) -> str:
+    """Said whenever Google issues a refresh token with an end date, which only Testing mode does."""
+    return (
+        f"Google limited this authorization: it stops working at {iso(expires_at)} because the Google "
+        "Cloud project's OAuth consent screen is in Testing mode. Publish the app ('In production', see "
+        "the README) and connect again for an authorization that does not expire."
+    )
+
+
 # Private file helpers ------------------------------------------------------------
 
 
@@ -547,6 +556,8 @@ class GoogleAuth:
         async with self._lock:
             self.tokens.save(token)
         logger.info("Google account connected (scopes: %s)", " ".join(token.scopes))
+        if token.refresh_token_expires_at:
+            logger.warning("%s", time_limited_warning(token.refresh_token_expires_at))
         return token
 
     async def complete_from_redirect(self, redirect: str) -> StoredToken:
@@ -676,10 +687,18 @@ class GoogleAuth:
             self._fallback_failure = (fallback.key, reason)
             raise FallbackUnavailable(reason)
         access = str(data["access_token"])
-        self._fallback_cache = (fallback.key, access, self._clock() + float(data.get("expires_in", 3600)))
+        now = self._clock()
+        self._fallback_cache = (fallback.key, access, now + float(data.get("expires_in", 3600)))
         logger.info(
             "Refreshed the fallback access token from %s (kept in memory)", self.settings.fallback_name
         )
+        if data.get("refresh_token_expires_in"):
+            # The fallback dies on that date too; say so while there is still time to reconnect.
+            logger.warning(
+                "The fallback authorization from %s stops working at %s (Testing-mode consent screen)",
+                self.settings.fallback_name,
+                iso(now + float(data["refresh_token_expires_in"])),
+            )
         return access
 
     async def _default_list_id(self, access_token: str) -> str:

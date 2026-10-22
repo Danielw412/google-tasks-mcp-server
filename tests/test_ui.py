@@ -53,6 +53,7 @@ def test_ui_html_is_self_contained_and_uses_only_mcp_tools() -> None:
     called = set(re.findall(r"""call(?:Tool)?\("([a-z_]+)\"""", APP_HTML))
     assert called == {
         "tasks_app_state",
+        "get_task_creation_instructions",
         "create_task",
         "complete_task",
         "update_task",

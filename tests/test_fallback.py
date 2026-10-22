@@ -125,6 +125,17 @@ async def test_expired_native_auth_falls_back_and_notifies_after_the_task(
     assert fallback_file.read_bytes() == before  # noqa: ASYNC240
 
 
+async def test_time_limited_fallback_is_logged(
+    components: Components, google: FakeGoogle, fallback_file: Path, caplog
+) -> None:
+    google.refresh_token_expires_in = 291763
+    write_fallback(fallback_file, google)
+    async with Client(components.mcp) as client:
+        is_error, data = await call(client, "list_task_lists")
+    assert not is_error, data
+    assert "fallback authorization from Canvas Task Sync stops working at" in caplog.text
+
+
 async def test_fresh_fallback_access_token_is_used_without_refreshing(
     components: Components, google: FakeGoogle, fallback_file: Path
 ) -> None:

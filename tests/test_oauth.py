@@ -5,11 +5,13 @@ import os
 import stat
 from urllib.parse import parse_qs, urlsplit
 
+import httpx2
 import pytest
 
+from google_tasks_mcp import cli
 from google_tasks_mcp.config import Settings
 from google_tasks_mcp.errors import AuthFlowError, NotConfigured, NotConnected, ReauthRequired
-from google_tasks_mcp.oauth import TASKS_SCOPE, GoogleAuth
+from google_tasks_mcp.oauth import TASKS_SCOPE, GoogleAuth, iso
 
 from .fake_google import CLIENT_ID, FakeGoogle
 
@@ -133,14 +135,32 @@ async def test_token_from_another_client_requires_reauth(connected: GoogleAuth) 
     assert connected.status().state == "reauth_required"
 
 
-async def test_testing_mode_expiry_is_surfaced(settings: Settings, http, google: FakeGoogle) -> None:
+async def test_testing_mode_expiry_is_surfaced(settings: Settings, http, google: FakeGoogle, caplog) -> None:
     google.refresh_token_expires_in = 604799
     now = [1_000_000.0]
     auth = GoogleAuth(settings, http, clock=lambda: now[0])
     await auth.complete_from_redirect(google.consent(auth.start_authorization().url))
     assert auth.status().authorization_expires_at is not None
+    assert "Testing mode" in caplog.text and iso(1_000_000 + 604799) in caplog.text
     now[0] += 604800
     assert auth.status().state == "reauth_required"
+
+
+async def test_published_app_authorization_has_no_expiry(connected: GoogleAuth, caplog) -> None:
+    assert connected.status().authorization_expires_at is None
+    assert "Testing mode" not in caplog.text
+
+
+async def test_cli_auth_warns_when_the_authorization_is_time_limited(
+    settings: Settings, http, google: FakeGoogle, monkeypatch, capsys
+) -> None:
+    google.refresh_token_expires_in = 604799
+    monkeypatch.setattr(cli, "new_http_client", lambda: httpx2.AsyncClient(transport=google.transport()))
+    redirect = google.consent(GoogleAuth(settings, http).start_authorization().url)
+    assert await cli.cmd_auth(settings, redirect, timeout=1) == 0
+    out = capsys.readouterr()
+    assert "Google Tasks connected." in out.out
+    assert "Testing mode" in out.err and "Publish the app" in out.err
 
 
 async def test_disconnect_revokes_and_deletes(connected: GoogleAuth, google: FakeGoogle) -> None:

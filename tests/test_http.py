@@ -69,9 +69,22 @@ async def test_oauth_callback_completes_sign_in(web, app_and_components, google:
     assert "default-src 'none'" in response.headers["content-security-policy"]
     assert components.auth.status().connected
     assert "ya29." not in response.text and "1//" not in response.text
+    assert "Testing mode" not in response.text
     # Replaying the same redirect fails cleanly.
     again = await web.get(f"{parts.path}?{parts.query}")
     assert again.status_code == 400 and "already used" in again.text
+
+
+async def test_oauth_callback_warns_when_the_authorization_is_time_limited(
+    web, app_and_components, google: FakeGoogle
+) -> None:
+    google.refresh_token_expires_in = 604799
+    _, components = app_and_components
+    parts = urlsplit(google.consent(components.auth.start_authorization().url))
+    response = await web.get(f"{parts.path}?{parts.query}")
+    assert response.status_code == 200
+    assert "Google Tasks connected" in response.text
+    assert "Testing mode" in response.text and "In production" in response.text
 
 
 async def test_oauth_callback_rejects_forged_state(web, google: FakeGoogle) -> None:
